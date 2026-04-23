@@ -1,0 +1,29 @@
+version: '3.8'
+services:
+  ecom-db:
+    image: mongo:latest
+    container_name: mongodb_so_sanh_gia
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./mongo_data:/data/db
+      - ./init-db:/docker-entrypoint-initdb.d
+    restart: always
+
+  backend:
+    build: ./backend
+    container_name: backend_fastapi
+    ports:
+      - "8000:8000"
+    depends_on:
+      - ecom-db
+    environment:
+      - MONGO_DETAILS=mongodb://ecom-db:27017
+
+  frontend:
+    image: nginx:alpine
+    container_name: frontend_dashboard
+    ports:
+      - "3000:80" 
+    volumes:
+      - ./frontend:/usr/share/nginx/html

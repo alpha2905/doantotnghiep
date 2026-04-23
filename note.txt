@@ -1,0 +1,146 @@
+═══════════════════════════════════════════════════════════════════════════════
+                    AI PRICE COMPARISON - HỆ THỐNG SO SÁNH GIÁ
+═══════════════════════════════════════════════════════════════════════════════
+
+📁 CẤU TRÚC DỰ ÁN:
+    backend/           - FastAPI Backend (main.py)
+    frontend/          - Giao diện web (index.html)
+    *_crawl/           - Các module crawl dữ liệu
+    data/              - Datasets training
+    model/             - Scripts train models
+    logs/              - Log files
+
+═══════════════════════════════════════════════════════════════════════════════
+                              🚀 KHỞI ĐỘNG NHANH
+═══════════════════════════════════════════════════════════════════════════════
+
+Cách 1: Chạy script tự động (Windows):
+    start.bat
+
+Cách 2: Chạy thủ công:
+    1. Khởi động MongoDB:
+       mongod
+
+    2. Khởi động Backend (Terminal 1):
+       cd backend
+       python main.py
+       # hoặc
+       uvicorn main:app --reload
+
+    3. Mở Frontend:
+       cd frontend
+       Mở file index.html trong trình duyệt
+       # hoặc
+       npx live-server --port=3000
+
+═══════════════════════════════════════════════════════════════════════════════
+                              🕷️ CRAWL DỮ LIỆU
+═══════════════════════════════════════════════════════════════════════════════
+
+Crawl thủ công:
+    FPT Shop:
+        python fpt_crawl/fpt_crawl_ip.py      # iPhone
+        python fpt_crawl/fpt_crawl_ss.py      # Samsung
+        python fpt_crawl/fpt_crawl_oppo.py    # OPPO
+        python fpt_crawl/fpt_crawl_xiaomi.py  # Xiaomi
+
+    Thế Giới Di Động:
+        python tgdd_crawl/tgdd_crawl_ip.py
+        python tgdd_crawl/tgdd_crawl_ss.py
+        python tgdd_crawl/tgdd_crawl_oppo.py
+        python tgdd_crawl/tgdd_crawl_xiaomi.py
+
+    Điện Máy Xanh:
+        python dmx_crawl/dmx_crawl_ip.py
+        python dmx_crawl/dmx_crawl_ss.py
+        python dmx_crawl/dmx_crawl_oppo.py
+        python dmx_crawl/dmx_crawl_xiaomi.py
+
+Crawl tự động (Scheduler):
+    python scheduler.py              # Chạy menu tương tác
+    python scheduler.py --mode auto  # Chạy tự động
+    python scheduler.py -m once -p fpt   # Crawl một lần FPT
+    python scheduler.py -m once -b iphone  # Crawl một lần iPhone
+
+═══════════════════════════════════════════════════════════════════════════════
+                              🧪 TEST API
+═══════════════════════════════════════════════════════════════════════════════
+
+    python test_api.py                    # Test tất cả
+    python test_api.py -i                 # Test tương tác
+    python test_api.py -b iphone -n "iPhone 15"  # Test cụ thể
+
+API Endpoint:
+    GET http://localhost:8000/api/compare?brand=iphone&name=iPhone%2015
+
+Swagger Docs:
+    http://localhost:8000/docs
+
+═══════════════════════════════════════════════════════════════════════════════
+                              🧠 TRAIN MODEL
+═══════════════════════════════════════════════════════════════════════════════
+
+Train LSTM (Dự báo giá):
+    cd model
+    python train_lstm.py
+
+Train PhoBERT (Phân tích cảm xúc):
+    cd model
+    python train_phobert.py
+
+═══════════════════════════════════════════════════════════════════════════════
+                              📦 CÀI ĐẶT
+═══════════════════════════════════════════════════════════════════════════════
+
+Cài đặt dependencies:
+    pip install -r requirements.txt
+
+Cấu hình môi trường:
+    copy .env.example .env
+    # Chỉnh sửa file .env nếu cần
+
+═══════════════════════════════════════════════════════════════════════════════
+                              🔧 CẤU HÌNH
+═══════════════════════════════════════════════════════════════════════════════
+
+Backend (backend/main.py):
+    - MongoDB URI: mongodb://localhost:27017
+    - API Port: 8000
+    - LSTM LOOK_BACK: 5 ngày
+    - BRANDS: iphone, samsung, oppo, xiaomi
+
+Frontend (frontend/index.html):
+    - API URL: http://127.0.0.1:8000/api/compare
+    - Auto-refresh: 30s
+
+Scheduler:
+    - CRAWL_INTERVAL_HOURS: 6
+    - CRAWL_TIME: 02:00 (2h sáng)
+
+═══════════════════════════════════════════════════════════════════════════════
+                              🐛 XỬ LÝ LỖI
+═══════════════════════════════════════════════════════════════════════════════
+
+Lỗi MongoDB:
+    - Kiểm tra: netstat -ano | findstr 27017
+    - Khởi động: mongod
+
+Lỗi ChromeDriver:
+    - Cập nhật: pip install --upgrade webdriver-manager
+
+Lỗi không load được model PhoBERT:
+    - Kiểm tra đường dẫn trong backend/main.py
+    - Đảm bảo models đã được train
+
+Lỗi CORS:
+    - Kiểm tra allow_origins trong main.py
+
+═══════════════════════════════════════════════════════════════════════════════
+                              👤 TÁC GIẢ
+═══════════════════════════════════════════════════════════════════════════════
+
+    Phát triển bởi: An Nguyễn
+    Trường: Đại học Bình Dương (BDU)
+    Lĩnh vực: AI, Web Scraping, Data Science
+
+═══════════════════════════════════════════════════════════════════════════════

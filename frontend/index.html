@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>AI Price Dashboard - Phân tích thông minh</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        * { font-family: 'Inter', sans-serif; }
+        
+        .comment-text {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            transition: max-height 0.4s cubic-bezier(0, 1, 0, 1);
+            max-height: 4.5em;
+        }
+
+        .comment-text.expanded {
+            display: block;
+            -webkit-line-clamp: unset;
+            max-height: 1000px;
+            transition: max-height 0.4s ease-in;
+        }
+
+        .comment-item {
+            border-left-width: 4px;
+            transition: transform 0.2s;
+        }
+
+        .comment-item:hover {
+            transform: translateX(4px);
+        }
+
+        .search-container { 
+            background: white;
+            border-radius: 24px;
+            box-shadow: 0 10px 40px -10px rgba(0,0,0,0.08);
+            border: 1px solid #f1f5f9;
+        }
+        .brand-pills-container { border-right: 1px solid #f1f5f9; }
+        .brand-btn {
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .brand-btn.active {
+            background-color: #fff7ed;
+            color: #ea580c;
+            box-shadow: inset 0 0 0 1px #fdba74;
+        }
+        .product-card { transition: all 0.3s ease; }
+        .product-card:hover { transform: translateY(-5px); box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1); }
+        .clickable-image { cursor: pointer; transition: transform 0.2s ease, opacity 0.2s ease; }
+        .clickable-image:hover { transform: scale(1.02); opacity: 0.9; }
+        .comments-scroll::-webkit-scrollbar { width: 4px; }
+        .comments-scroll::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 10px; }
+        .comments-scroll::-webkit-scrollbar-thumb { background: #fdba74; border-radius: 10px; }
+        .empty-state-card {
+            background: linear-gradient(145deg, #fafafa 0%, #f4f4f5 100%);
+        }
+        .platform-logo {
+            height: 32px;
+            width: auto;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body class="bg-slate-50">
+
+    <header class="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-slate-100 py-4">
+        <div class="container mx-auto px-4">
+            <div class="flex flex-col lg:flex-row items-center gap-4">
+                <div class="flex-shrink-0 text-2xl font-black tracking-tighter">
+                    <span class="text-slate-900">BDU</span><span class="text-orange-600">NHA</span><span class="text-xs ml-1 font-bold text-slate-400">AI</span>
+                </div>
+
+                <div class="search-container flex flex-1 w-full overflow-hidden p-1.5">
+                    <div id="brandSelectors" class="hidden md:flex items-center gap-1 px-2 brand-pills-container">
+                        <button onclick="selectBrand('iphone', this)" class="brand-btn active px-4 py-2 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50">iPhone</button>
+                        <button onclick="selectBrand('samsung', this)" class="brand-btn px-4 py-2 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50">Samsung</button>
+                        <button onclick="selectBrand('xiaomi', this)" class="brand-btn px-4 py-2 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50">Xiaomi</button>
+                        <button onclick="selectBrand('oppo', this)" class="brand-btn px-4 py-2 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-50">Oppo</button>
+                    </div>
+
+                    <div class="relative flex-1 flex items-center">
+                        <svg class="absolute left-4 h-5 w-5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        <input type="text" id="productName" 
+                               onkeyup="if(event.key === 'Enter') handleSearch()"
+                               placeholder="Nhập tên máy bạn cần so sánh giá (VD: iPhone 16 Plus 128GB)" 
+                               class="w-full pl-12 pr-4 py-3 outline-none text-slate-700 font-medium placeholder:text-slate-400">
+                    </div>
+
+                    <button onclick="handleSearch()" class="bg-orange-600 hover:bg-orange-700 text-white px-8 py-3 rounded-2xl font-bold transition-all transform active:scale-95 shadow-lg shadow-orange-200">
+                        TÌM KIẾM
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="container mx-auto px-4 py-8">
+        <div class="mb-10 bg-gradient-to-r from-orange-600 to-orange-400 rounded-3xl p-6 text-white shadow-xl flex flex-col md:flex-row justify-between items-center">
+            <div class="space-y-1">
+                <h2 class="text-3xl font-extrabold italic tracking-tight">🤖 Dự báo LSTM + Cảm xúc AI chính xác</h2>
+                <p class="text-orange-100 text-sm font-medium">Dữ liệu cập nhật: <span id="latest-date" class="font-black">--/--/----</span></p>
+            </div>
+            <div class="bg-white/20 rounded-full px-4 py-2 backdrop-blur-sm text-sm font-bold">
+                🔮 Biểu đồ đứt nét = Dự báo ngày mai
+            </div>
+        </div>
+
+        <div id="resultsList" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+            <div class="col-span-full text-center py-20 bg-white rounded-[3rem] border-2 border-dashed border-slate-200">
+                <div class="text-slate-300 mb-4">
+                    <svg class="h-16 w-16 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                </div>
+                <p class="text-slate-500 font-semibold">🔍 Chọn hãng và nhập tên điện thoại để phân tích</p>
+                <p class="text-xs text-slate-400 mt-2">Hệ thống sẽ hiển thị tối đa 10 nhận xét ngẫu nhiên + gán nhãn cảm xúc</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const PLATFORM_LOGOS = {
+            "FPT": "./logos/fpt.jpg",
+            "TGDD": "./logos/tgdd.jpg",
+            "DMX": "./logos/dmx.jpg"
+        };
+        
+        function getLogoHtml(platform) {
+            const logoUrl = PLATFORM_LOGOS[platform];
+            if (logoUrl) {
+                return `<img src="${logoUrl}" alt="${platform}" class="platform-logo max-h-8 w-auto object-contain" onerror="this.onerror=null; this.parentElement.innerHTML='<span class=\\'bg-slate-100 text-slate-600 text-[10px] px-3 py-1 rounded-full font-bold\\'>${platform}</span>'">`;
+            }
+            return `<span class="bg-slate-100 text-slate-600 text-[10px] px-3 py-1 rounded-full font-bold">${platform}</span>`;
+        }
+
+        let selectedBrand = 'iphone';
+
+        function selectBrand(brand, el) {
+            selectedBrand = brand;
+            document.querySelectorAll('.brand-btn').forEach(b => b.classList.remove('active'));
+            el.classList.add('active');
+        }
+
+        function openProductLink(url) {
+            if (url && url !== '#') window.open(url, '_blank');
+        }
+
+        // --- PHẦN NHẬN XÉT ---
+        
+        function getRandomComments(commentsArray, maxLimit = 10) {
+            if (!commentsArray || commentsArray.length === 0) return [];
+            const shuffled = [...commentsArray].sort(() => 0.5 - Math.random());
+            return shuffled.slice(0, maxLimit);
+        }
+
+        function renderCommentItem(commentObj, idx) {
+            const rawText = commentObj.text || "";
+            const uniqueId = `cmt-${Math.random().toString(36).substr(2, 9)}`;
+            const sentiment = commentObj.label || "NEUTRAL"; 
+            
+            const config = {
+                POSITIVE: { bg: 'bg-green-50', border: 'border-green-400', badge: 'bg-green-100 text-green-700', label: 'TÍCH CỰC' },
+                NEGATIVE: { bg: 'bg-red-50', border: 'border-red-300', badge: 'bg-red-100 text-red-700', label: 'TIÊU CỰC' },
+                NEUTRAL: { bg: 'bg-slate-50', border: 'border-slate-300', badge: 'bg-slate-200 text-slate-600', label: 'TRUNG TÍNH' }
+            }[sentiment];
+
+            return `
+                <div class="comment-item p-3 rounded-xl ${config.bg} ${config.border} mb-3 shadow-sm">
+                    <p id="${uniqueId}" class="text-[12px] leading-relaxed text-slate-700 font-medium comment-text">
+                        ${escapeHtml(rawText)}
+                    </p>
+                    <div class="flex justify-between items-center mt-2 pt-2 border-t border-slate-200/50">
+                        <span class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">🏷️ ${escapeHtml(commentObj.aspect || "Chung")}</span>
+                        <span class="text-[9px] font-black px-2 py-0.5 rounded-md ${config.badge}">${config.label}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- HÀM ĐỊNH DẠNG NGÀY ---
+        function formatDate(dateString) {
+            if (!dateString || typeof dateString !== 'string') return '--/--/----';
+            // Nếu đã ở định dạng DD/MM/YYYY
+            if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateString)) return dateString;
+            // Chuyển đổi từ YYYY-MM-DD sang DD/MM/YYYY
+            const parts = dateString.split('-');
+            if (parts.length === 3) {
+                return `${parts[2]}/${parts[1]}/${parts[0]}`;
+            }
+            return dateString;
+        }
+
+        // Hàm tạo đầy đủ các ngày liên tiếp
+        function fillMissingDates(labels, data) {
+            if (!labels || labels.length === 0) return { labels: labels, data: data };
+            
+            const resultLabels = [];
+            const resultData = [];
+            
+            // Parse ngày đầu và ngày cuối
+            let startDate, endDate;
+            try {
+                const firstParts = labels[0].split('/');
+                const lastParts = labels[labels.length - 1].split('/');
+                startDate = new Date(2026, parseInt(firstParts[1]) - 1, parseInt(firstParts[0]));
+                endDate = new Date(2026, parseInt(lastParts[1]) - 1, parseInt(lastParts[0]));
+            } catch (e) {
+                return { labels: labels, data: data };
+            }
+            
+            // Tạo map từ label -> giá
+            const priceMap = {};
+            labels.forEach((label, idx) => {
+                priceMap[label] = data[idx] || data[data.length - 1];
+            });
+            
+            // Điền các ngày còn thiếu
+            const currentDate = new Date(startDate);
+            while (currentDate <= endDate) {
+                const day = String(currentDate.getDate()).padStart(2, '0');
+                const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+                const label = `${day}/${month}`;
+                
+                resultLabels.push(label);
+                resultData.push(priceMap[label] || resultData[resultData.length - 1] || data[0]);
+                
+                currentDate.setDate(currentDate.getDate() + 1);
+            }
+            
+            // Giới hạn 7 ngày gần nhất
+            if (resultLabels.length > 7) {
+                return {
+                    labels: resultLabels.slice(-7),
+                    data: resultData.slice(-7)
+                };
+            }
+            
+            return { labels: resultLabels, data: resultData };
+        }
+
+        function renderChartWithForecast(canvasId, historicalLabels, historicalPrices, forecastPrice) {
+            const ctx = document.getElementById(canvasId)?.getContext('2d');
+            if (!ctx) return;
+            
+            // Điền các ngày còn thiếu để hiển thị liên tục
+            const filled = fillMissingDates(historicalLabels, historicalPrices);
+            const displayLabels = [...filled.labels, "Ngày mai"];
+            const displayData = [...filled.data];
+            const lastHistorical = displayData[displayData.length - 1];
+            
+            const forecastLineData = new Array(displayLabels.length).fill(null);
+            forecastLineData[displayLabels.length - 2] = lastHistorical;
+            forecastLineData[displayLabels.length - 1] = forecastPrice;
+            
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: displayLabels,
+                    datasets: [
+                        {
+                            label: 'Giá thực tế',
+                            data: [...displayData, null],
+                            borderColor: '#ea580c',
+                            backgroundColor: 'rgba(234,88,12,0.1)',
+                            borderWidth: 2.5,
+                            tension: 0.3,
+                            fill: true,
+                            spanGaps: true
+                        },
+                        {
+                            label: 'Dự báo LSTM',
+                            data: forecastLineData,
+                            borderColor: '#f97316',
+                            borderWidth: 2.5,
+                            borderDash: [8, 6],
+                            pointRadius: 5,
+                            fill: false,
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    scales: { 
+                        y: { ticks: { display: false }, grid: { display: false } }, 
+                        x: { ticks: { font: { size: 9 } }, grid: { display: false } } 
+                    }
+                }
+            });
+        }
+
+        function createEmptyProductCard(platform, lastDateLabel) {
+            return `
+                <div class="product-card bg-white rounded-[2.5rem] p-6 border border-slate-200 shadow-sm flex flex-col h-full empty-state-card">
+                    <div class="flex justify-between items-center mb-4">
+                        <div class="flex items-center gap-2">${getLogoHtml(platform)}</div>
+                        <span class="text-[10px] text-slate-400 font-bold">📅 ${lastDateLabel}</span>
+                    </div>
+                    <div class="bg-slate-100 rounded-2xl p-8 text-center mb-4">
+                        <svg class="h-24 w-24 mx-auto text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                        <p class="text-slate-500 font-bold mt-2 text-sm">Không có sản phẩm</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function handleSearch() {
+            const nameInput = document.getElementById('productName').value.trim();
+            const listDiv = document.getElementById('resultsList');
+            if (!nameInput) return;
+            
+            listDiv.innerHTML = `<div class="col-span-full text-center py-20 font-bold text-orange-500 animate-pulse">Đang phân tích dữ liệu...</div>`;
+            
+            try {
+                const response = await fetch(`http://127.0.0.1:8000/api/compare?brand=${selectedBrand}&name=${encodeURIComponent(nameInput)}`);
+                const data = await response.json();
+                listDiv.innerHTML = '';
+                
+                const platformsOrder = ["FPT", "TGDD", "DMX"];
+                const platformMap = new Map();
+                data.results?.forEach(item => platformMap.set(item.platform, item));
+
+                // Cập nhật ngày mới nhất ở header
+                let latestDate = null;
+                data.results?.forEach(item => {
+                    if (item.last_crawl_date) {
+                        const itemDate = new Date(item.last_crawl_date);
+                        if (!latestDate || itemDate > latestDate) {
+                            latestDate = itemDate;
+                        }
+                    }
+                });
+                if (latestDate) {
+                    document.getElementById('latest-date').textContent = formatDate(latestDate.toISOString().split('T')[0]);
+                }
+
+                for (let platform of platformsOrder) {
+                    const item = platformMap.get(platform);
+                    if (!item || item.current_price === 0) {
+                        listDiv.insertAdjacentHTML('beforeend', createEmptyProductCard(platform, "12/04/2026"));
+                        continue;
+                    }
+
+                    let rawComments = [];
+                    if (item.sentiment?.list) rawComments = item.sentiment.list;
+                    else if (item.comments) rawComments = item.comments.map(c => ({ text: c }));
+
+                    const randomComments = getRandomComments(rawComments, 10);
+                    const sent = item.sentiment || { pos: 0, neu: 0, neg: 0, list: [] };
+
+                    const commentsHTML = `
+                        <div class="mt-4 pt-4 border-t border-slate-100">
+                            <div class="flex justify-between items-center mb-1">
+                                <h4 class="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1">
+                                    <span class="w-2 h-2 bg-orange-500 rounded-full animate-pulse"></span>
+                                    AI Sentiment Analysis
+                                </h4>
+                                <span class="text-[9px] text-slate-400 font-bold">${randomComments.length} nhận xét</span>
+                            </div>
+                            <div class="mb-4">
+                                <div class="flex w-full h-1.5 rounded-full overflow-hidden bg-slate-100 my-2">
+                                    <div style="width: ${sent.pos}%" class="bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.4)]"></div>
+                                    <div style="width: ${sent.neu}%" class="bg-slate-300"></div>
+                                    <div style="width: ${sent.neg}%" class="bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.4)]"></div>
+                                </div>
+                                <div class="flex justify-between text-[9px] font-black">
+                                    <span class="text-green-600">${sent.pos}% Tích cực</span>
+                                    <span class="text-slate-500">${sent.neu}% Trung tính</span>
+                                    <span class="text-red-500">${sent.neg}% Tiêu cực</span>
+                                </div>
+                            </div>
+                            <div class="space-y-1 max-h-[280px] overflow-y-auto pr-2 comments-scroll">
+                                ${randomComments.length > 0 ? randomComments.map((cmt, idx) => renderCommentItem(cmt, idx)).join('') : '<p class="text-xs text-slate-400 italic text-center py-4">Chưa có nhận xét</p>'}
+                            </div>
+                        </div>
+                    `;
+
+                    const chartId = `chart-${platform}-${Date.now()}`;
+                    const productCard = document.createElement('div');
+                    productCard.className = 'product-card bg-white rounded-[2.5rem] p-6 border border-slate-100 shadow-sm flex flex-col h-full';
+                    productCard.innerHTML = `
+                        <div class="flex justify-between items-start mb-4">
+                            <div>${getLogoHtml(platform)}</div>
+                            <span class="text-[10px] text-slate-400 font-bold">📅 ${formatDate(item.last_crawl_date)}</span>
+                        </div>
+                        <div class="bg-slate-50 rounded-2xl p-4 mb-4 text-center cursor-pointer" onclick="openProductLink('${item.link}')">
+                            <img src="${item.image}" class="h-40 mx-auto object-contain drop-shadow-md clickable-image" onerror="this.src='https://placehold.co/200x200?text=No+Image'">
+                        </div>
+                        <h3 class="font-bold text-slate-800 text-sm mb-1 line-clamp-2">${escapeHtml(item.name)}</h3>
+                        <div class="flex items-baseline gap-2 mb-3">
+                            <span class="text-2xl font-black text-slate-900">${item.current_price.toLocaleString()}đ</span>
+                        </div>
+                        <div class="bg-amber-50/50 rounded-2xl p-3 border border-orange-100">
+                            <div class="flex justify-between items-center text-[10px] font-black uppercase text-slate-600">
+                                <span>🔮 Dự báo ngày mai</span>
+                                <span class="text-orange-600">${Math.round(item.forecast || item.current_price).toLocaleString()}đ</span>
+                            </div>
+                            <div class="h-24 w-full mt-2"><canvas id="${chartId}"></canvas></div>
+                        </div>
+                        ${commentsHTML}
+                    `;
+                    listDiv.appendChild(productCard);
+                    
+                    setTimeout(() => {
+                        const hLabels = item.chart?.labels || ['T2','T3','T4','T5','T6','T7','CN'];
+                        const hPrices = item.chart?.data || Array(7).fill(item.current_price);
+                        renderChartWithForecast(chartId, hLabels, hPrices, item.forecast || item.current_price);
+                    }, 100);
+                }
+            } catch (err) {
+                listDiv.innerHTML = `<div class="col-span-full text-center py-20 text-red-500 font-bold">Lỗi kết nối Server: ${err.message}</div>`;
+            }
+        }
+
+        function escapeHtml(str) {
+            if (!str) return '';
+            const map = { '&': '&', '<': '<', '>': '>', '"': '"', "'": '&#039;' };
+            return str.replace(/[&<>"']/g, m => map[m]);
+        }
+    </script>
+</body>
+</html>

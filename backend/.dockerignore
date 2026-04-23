@@ -1,0 +1,18 @@
+# Bỏ qua môi trường ảo (Cực nặng)
+venv/
+.venv/
+env/
+
+# Bỏ qua bộ nhớ đệm Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Bỏ qua dữ liệu cục bộ và rác IDE
+.vscode/
+.idea/
+.git/
+mongo_data/
+*.archive
+*.log

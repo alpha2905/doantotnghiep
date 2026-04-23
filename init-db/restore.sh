@@ -1,0 +1,1 @@
+mongorestore --archive=/docker-entrypoint-initdb.d/data_backup.archive
