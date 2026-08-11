@@ -1,6 +1,19 @@
+# -*- coding: utf-8 -*-
+"""
+Train LSTM tổng quát (1 model duy nhất) đọc trực tiếp MongoDB Atlas của datn.
+
+- Kết nối: mongodb+srv://22050040_db_user:Accnam55@giasanpham.uqyaw1p.mongodb.net/
+- Database: price_tracker
+- Đọc TẤT CẢ 9 collections: products, tgdd, fpt, cellphones, viettelstore,
+  hoangha, didongviet, clickbuy, mobilecity
+- Không giới hạn brand → user query tùy ý ở FE
+- Lọc sản phẩm có price_history >= 6 điểm (tối thiểu để tạo mẫu với LOOK_BACK=5)
+- Xuất model: backend/models/general_lstm_best.keras + general_scaler.pkl
+"""
 import numpy as np
-import pandas as pd
 import os
+import re
+import sys
 import joblib
 import warnings
 from datetime import datetime
@@ -12,172 +25,186 @@ from tensorflow.keras.callbacks import ModelCheckpoint
 
 warnings.filterwarnings('ignore')
 
+# Đảm bảo console in được tiếng Việt/emoji
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
+
+def parse_price_value(h):
+    """Lấy giá trị số từ price_history entry.
+
+    Hỗ trợ 2 dạng:
+    - price_value: số (int/float) — collection products
+    - price: string VND ("52.990.000 đ", "22,890,000 ₫", "12.750.000đ")
+    """
+    pv = h.get("price_value")
+    if pv is not None:
+        try:
+            pv = float(pv)
+            if pv > 0:
+                return pv
+        except (TypeError, ValueError):
+            pass
+
+    price_str = h.get("price")
+    if price_str is not None:
+        digits = re.sub(r"[^\d]", "", str(price_str))
+        if digits:
+            try:
+                pv = float(digits)
+                if pv > 0:
+                    return pv
+            except (TypeError, ValueError):
+                pass
+    return None
+
 # --- CẤU HÌNH ---
-MONGO_URI = "mongodb://localhost:27017/"
-MODEL_DIR = "models"
-LOOK_BACK = 5 
-BRANDS = ["iphone", "samsung", "oppo", "xiaomi"]
+MONGO_URI = "mongodb+srv://22050040_db_user:Accnam55@giasanpham.uqyaw1p.mongodb.net/?appName=GiaSanPham"
+MONGO_DB = "price_tracker"
+COLLECTIONS = [
+    "products", "tgdd", "fpt", "cellphones", "viettelstore",
+    "hoangha", "didongviet", "clickbuy", "mobilecity"
+]
+MODEL_DIR = os.path.join("backend", "models")
+LOOK_BACK = 5
+MIN_HISTORY = 6  # Số điểm price_history tối thiểu để train
 
 if not os.path.exists(MODEL_DIR):
     os.makedirs(MODEL_DIR)
 
-client = MongoClient(MONGO_URI)
+client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=15000)
+
 
 def load_and_clean_data():
-    """Gom dữ liệu và lọc bỏ sản phẩm lỗi"""
+    """Gom dữ liệu từ TẤT CẢ collections của datn, lọc sản phẩm đủ lịch sử giá."""
     all_data = []
-    databases = {
-        "dmx_database": ["iphone_products", "samsung_products", "xiaomi_products", "oppo_products"],
-        "fpt_database": ["iphone_full_data", "samsung_full_data", "xiaomi_full_data", "oppo_full_data"],
-        "tgdd_database": ["iphone_master_data", "samsung_master_data", "xiaomi_master_data", "oppo_master_data"]
-    }
-    
-    print("🔍 Đang quét Database...")
-    for db_name, collections in databases.items():
-        db = client[db_name]
-        for col_name in collections:
-            items = list(db[col_name].find({}, {"name": 1, "brand": 1, "price_history": 1}))
+    db = client[MONGO_DB]
+
+    print("🔍 Đang quét MongoDB Atlas (price_tracker)...")
+    for col_name in COLLECTIONS:
+        try:
+            col = db[col_name]
+            items = list(col.find({}, {"name": 1, "source": 1, "price_history": 1}))
+            valid = 0
             for item in items:
                 history = item.get("price_history", [])
-                if isinstance(history, list) and len(history) > 0:
-                    unique_history = {h['date']: float(h['price']) for h in history if h.get('price')}
-                    if unique_history:
-                        sorted_dates = sorted(unique_history.keys())
-                        clean_prices = [unique_history[d] for d in sorted_dates]
-                        all_data.append({
-                            "name": item.get("name", "Unknown"),
-                            "brand": str(item.get("brand", "iphone")).lower(),
-                            "prices": clean_prices
-                        })
-    print(f"✅ Đã tải {len(all_data)} sản phẩm hợp lệ.")
+                if not isinstance(history, list) or len(history) < MIN_HISTORY:
+                    continue
+
+                # Gom giá theo ngày (scraped_at -> date, price -> giá trị số)
+                unique_history = {}
+                for h in history:
+                    if not h:
+                        continue
+                    price_val = parse_price_value(h)
+                    if price_val is None:
+                        continue
+
+                    scraped_at = h.get("scraped_at")
+                    if isinstance(scraped_at, datetime):
+                        date_str = scraped_at.strftime("%Y-%m-%d")
+                    else:
+                        date_str = str(scraped_at)[:10]
+
+                    # Nếu cùng ngày, giữ giá cuối cùng trong ngày
+                    unique_history[date_str] = price_val
+
+                if len(unique_history) < MIN_HISTORY:
+                    continue
+
+                sorted_dates = sorted(unique_history.keys())
+                clean_prices = [unique_history[d] for d in sorted_dates]
+                all_data.append({
+                    "name": item.get("name", "Unknown"),
+                    "source": str(item.get("source", "")),
+                    "prices": clean_prices
+                })
+                valid += 1
+            print(f"  ✅ {col_name}: {valid} sản phẩm hợp lệ (≥{MIN_HISTORY} điểm giá)")
+        except Exception as e:
+            print(f"  ⚠️ {col_name}: lỗi - {e}")
+
+    print(f"✅ Đã tải tổng cộng {len(all_data)} sản phẩm hợp lệ.")
     return all_data
 
-def get_safe_sequence(prices, look_back=5):
-    """Bù dữ liệu (Padding) nếu sản phẩm quá mới"""
-    if len(prices) >= look_back:
-        return np.array(prices[-look_back:])
-    padding_size = look_back - len(prices)
-    return np.array([prices[0]] * padding_size + prices)
 
 def build_lstm_model():
     model = Sequential([
         LSTM(64, return_sequences=True, input_shape=(LOOK_BACK, 1)),
-        Dropout(0.2), # Tăng nhẹ dropout để chống overfit
+        Dropout(0.2),
         LSTM(32),
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mse')
     return model
 
-def train_brand_model(brand_name, all_data):
-    print(f"\n🚀 Đang xử lý Brand: {brand_name.upper()}")
-    
-    # 1. Gom tất cả X và y từ từng sản phẩm riêng biệt (Tránh Data Leakage)
-    all_X_samples = []
-    all_y_samples = []
-    
-    scaler = MinMaxScaler()
-    
-    # Gom toàn bộ giá của brand để fit scaler (đảm bảo thang đo thống nhất)
-    all_brand_prices = []
+
+def train_general_model(all_data):
+    """Train 1 model LSTM tổng quát trên tất cả sản phẩm (không phân biệt brand)."""
+    print("\n🚀 Đang train Model LSTM TỔNG QUÁT (tất cả sản phẩm)...")
+
+    # 1. Gom toàn bộ giá để fit scaler (thang đo thống nhất)
+    all_prices = []
     for item in all_data:
-        if brand_name in item['brand'] or brand_name in item['name'].lower():
-            all_brand_prices.extend(item['prices'])
-            
-    if len(all_brand_prices) < 20:
-        print(f"⚠️ {brand_name} quá ít dữ liệu, bỏ qua.")
+        all_prices.extend(item['prices'])
+
+    if len(all_prices) < 20:
+        print("⚠️ Quá ít dữ liệu, bỏ qua.")
         return
 
-    # Fit scaler trên toàn bộ vùng giá của Brand
-    prices_reshaped = np.array(all_brand_prices).reshape(-1, 1)
+    scaler = MinMaxScaler()
+    prices_reshaped = np.array(all_prices).reshape(-1, 1)
     scaler.fit(prices_reshaped)
 
-    # 2. Tạo tập Train cho từng sản phẩm
+    # 2. Tạo tập train từ từng sản phẩm riêng biệt (tránh Data Leakage)
+    all_X_samples = []
+    all_y_samples = []
+
     for item in all_data:
-        if brand_name in item['brand'] or brand_name in item['name'].lower():
-            # Scale giá của từng sản phẩm
-            prod_prices = np.array(item['prices']).reshape(-1, 1)
-            scaled_prod = scaler.transform(prod_prices).flatten()
-            
-            # Chỉ tạo mẫu nếu sản phẩm có đủ dữ liệu (hoặc dùng padding nếu cần)
-            # Ở đây mình ưu tiên sản phẩm có ít nhất (LOOK_BACK + 1) ngày
-            if len(scaled_prod) > LOOK_BACK:
-                for i in range(len(scaled_prod) - LOOK_BACK):
-                    all_X_samples.append(scaled_prod[i:i+LOOK_BACK])
-                    all_y_samples.append(scaled_prod[i+LOOK_BACK])
+        prod_prices = np.array(item['prices']).reshape(-1, 1)
+        scaled_prod = scaler.transform(prod_prices).flatten()
+
+        # Chỉ tạo mẫu nếu sản phẩm có đủ dữ liệu (> LOOK_BACK)
+        if len(scaled_prod) > LOOK_BACK:
+            for i in range(len(scaled_prod) - LOOK_BACK):
+                all_X_samples.append(scaled_prod[i:i + LOOK_BACK])
+                all_y_samples.append(scaled_prod[i + LOOK_BACK])
 
     X = np.array(all_X_samples)
     y = np.array(all_y_samples)
-    
+
     if len(X) == 0:
-        print(f"⚠️ Không tạo được mẫu train cho {brand_name}.")
+        print("⚠️ Không tạo được mẫu train nào.")
         return
 
     X = X.reshape(X.shape[0], X.shape[1], 1)
+    print(f"📊 Tổng số mẫu train: {len(X)}")
 
     # 3. Huấn luyện
-    model_path = os.path.join(MODEL_DIR, f"{brand_name}_lstm_best.keras")
+    model_path = os.path.join(MODEL_DIR, "general_lstm_best.keras")
+    scaler_path = os.path.join(MODEL_DIR, "general_scaler.pkl")
+
     if os.path.exists(model_path):
-        print(f"🔄 Cập nhật kiến thức cho {brand_name}...")
+        print("🔄 Cập nhật kiến thức cho Model tổng quát...")
         model = load_model(model_path)
         epochs = 20
     else:
-        print(f"🆕 Khởi tạo Model mới cho {brand_name}...")
+        print("🆕 Khởi tạo Model tổng quát mới...")
         model = build_lstm_model()
         epochs = 60
 
-    model.fit(X, y, epochs=epochs, batch_size=32, verbose=1)
+    checkpoint = ModelCheckpoint(
+        model_path, monitor='loss', save_best_only=True, verbose=1
+    )
+    model.fit(X, y, epochs=epochs, batch_size=32, verbose=1, callbacks=[checkpoint])
     model.save(model_path)
-    joblib.dump(scaler, os.path.join(MODEL_DIR, f"{brand_name}_scaler.pkl"))
-    print(f"✅ Đã lưu Model và Scaler cho {brand_name}")
+    joblib.dump(scaler, scaler_path)
+    print(f"✅ Đã lưu Model và Scaler: {model_path}")
 
-def predict_next_7_days(brand_name, all_data):
-    """Dự báo dựa trên chuỗi giá cuối cùng của Brand"""
-    model_path = os.path.join(MODEL_DIR, f"{brand_name}_lstm_best.keras")
-    scaler_path = os.path.join(MODEL_DIR, f"{brand_name}_scaler.pkl")
-    
-    if not os.path.exists(model_path): return None
-
-    model = load_model(model_path)
-    scaler = joblib.load(scaler_path)
-    
-    # Lấy giá của sản phẩm có lịch sử mới nhất của hãng này
-    latest_prices = []
-    for item in reversed(all_data): # Ưu tiên các sp mới cập nhật
-        if brand_name in item['brand'] or brand_name in item['name'].lower():
-            latest_prices = item['prices']
-            break
-            
-    if not latest_prices: return None
-
-    input_seq = get_safe_sequence(latest_prices, LOOK_BACK)
-    predictions = []
-    curr_input = input_seq.tolist()
-
-    for _ in range(7):
-        # Scale input
-        scaled_input = scaler.transform(np.array(curr_input[-LOOK_BACK:]).reshape(-1, 1))
-        scaled_input = scaled_input.reshape(1, LOOK_BACK, 1)
-        
-        # Predict
-        pred_scaled = model.predict(scaled_input, verbose=0)
-        pred_price = scaler.inverse_transform(pred_scaled)[0][0]
-        
-        predictions.append(int(pred_price))
-        curr_input.append(pred_price)
-        
-    return predictions
 
 if __name__ == "__main__":
     print(f"🚀 BẮT ĐẦU CHƯƠNG TRÌNH AI - {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
     data = load_and_clean_data()
-    
-    for b in BRANDS:
-        train_brand_model(b, data)
-        
-        forecast = predict_next_7_days(b, data)
-        if forecast:
-            print(f"🔮 DỰ BÁO {b.upper()} 7 NGÀY TỚI:")
-            print(" -> ".join([f"{p:,.0f}đ" for p in forecast]))
-    
-    print("\n✨ HOÀN TẤT CẬP NHẬT TOÀN BỘ HỆ THỐNG AI.")
+    train_general_model(data)
+    print("\n✨ HOÀN TẤT CẬP NHẬT HỆ THỐNG AI.")

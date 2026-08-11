@@ -1,8 +1,14 @@
 import os
+import sys
 import torch
 import json
 import pandas as pd
 import numpy as np
+
+# Fix lỗi UnicodeEncodeError trên Windows console (cp1252 không encode được emoji)
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
 from torch.utils.data import Dataset
 from transformers import (
     AutoTokenizer,
@@ -25,7 +31,7 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 MODEL_NAME = "vinai/phobert-base-v2"
 MAX_LENGTH = 128
 BATCH_SIZE = 16
-EPOCHS = 50  
+EPOCHS = 15  
 LEARNING_RATE = 2e-5
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, "phobert_models")
 
@@ -122,7 +128,7 @@ def train_phobert(task_name, train_texts, train_labels, val_texts, val_labels, l
         train_dataset=train_dataset,
         eval_dataset=val_dataset,
         compute_metrics=compute_metrics,
-        callbacks=[ProgressCallback()]
+        callbacks=[ProgressCallback(), EarlyStoppingCallback(early_stopping_patience=3)]
     )
     
     # Huấn luyện với resume nếu có
@@ -145,12 +151,12 @@ def train_phobert(task_name, train_texts, train_labels, val_texts, val_labels, l
 
 def main():
     # === SỬ DỤNG JSONL TRAINING DATA ĐÃ CÂN BẰNG ===
-    sentiment_file = os.path.join(DATA_DIR, "phobert_train_sentiment.jsonl")
+    # Sentiment: dữ liệu comments từ datn (MongoDB Atlas) đã weak-label + cân bằng
+    sentiment_file = os.path.join(DATA_DIR, "phobert_train_sentiment_datn_balanced.jsonl")
+    # Aspect: giữ dữ liệu aspect hiện có
     aspect_file = os.path.join(DATA_DIR, "phobert_train_aspect.jsonl")
-    
-def main():
+
     # Load dữ liệu sentiment
-    sentiment_file = os.path.join(DATA_DIR, "phobert_train_sentiment.jsonl")
     if os.path.exists(sentiment_file):
         print("\n📌 CHẠY TASK 1: SENTIMENT CLASSIFICATION")
         texts, labels = [], []

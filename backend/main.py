@@ -20,11 +20,11 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BRANDS = ["iphone", "samsung", "oppo", "xiaomi"]
 LOOK_BACK = 5
 ASPECT_LABELS = [
-    "khác", "pin", "giá", "hiệu_năng", "màn_hình", "camera", 
-    "thiết_kế", "loa_âm_thanh", "bảo_mật", "hệ_điều_hành", "phụ_kiện", "phục_vụ"
+    "bảo_mật", "camera", "giá", "hiệu_năng", "hệ_điều_hành", 
+    "khác", "loa_âm_thanh", "màn_hình", "pin", "thiết_kế"
 ]
 
-lstm_models, scalers = {}, {}
+lstm_model, scaler = None, None
 tokenizer, model_sent, model_aspect = None, None, None
 
 def clean_product_name(name):
@@ -51,14 +51,16 @@ async def lifespan(app: FastAPI):
     global tokenizer, model_sent, model_aspect
     print("🚀 Hệ thống so sánh giá An Nguyễn đang khởi động...")
     
-    # Load LSTM Models cho dự báo giá
-    for brand in BRANDS:
-        m_path = os.path.join(BASE_DIR, "models", f"{brand}_lstm_best.keras")
-        s_path = os.path.join(BASE_DIR, "models", f"{brand}_scaler.pkl")
-        if os.path.exists(m_path): 
-            lstm_models[brand] = tf.keras.models.load_model(m_path)
-        if os.path.exists(s_path): 
-            scalers[brand] = joblib.load(s_path)
+    # Load LSTM Model tổng quát cho dự báo giá
+    global lstm_model, scaler
+    m_path = os.path.join(BASE_DIR, "models", "general_lstm_best.keras")
+    s_path = os.path.join(BASE_DIR, "models", "general_scaler.pkl")
+    if os.path.exists(m_path):
+        lstm_model = tf.keras.models.load_model(m_path)
+        print(f"✅ LSTM Model loaded: {m_path}")
+    if os.path.exists(s_path):
+        scaler = joblib.load(s_path)
+        print(f"✅ Scaler loaded: {s_path}")
     
     # Load PhoBERT Models cho NLP
     try:
@@ -87,7 +89,7 @@ async def lifespan(app: FastAPI):
         print(f"📂 Loading aspect model from: {asp_path}")
         model_aspect = RobertaForSequenceClassification.from_pretrained(
             asp_path, 
-            num_labels=12, 
+            num_labels=10, 
             ignore_mismatched_sizes=True,
             local_files_only=True
         )
@@ -192,21 +194,7 @@ def analyze_comments_ai(comments):
         ("hệ điều hành", "hệ_điều_hành"), ("bản cập nhật", "hệ_điều_hành"),
         ("cập nhật phần mềm", "hệ_điều_hành"), ("giao diện người dùng", "hệ_điều_hành"),
         ("ios", "hệ_điều_hành"), ("android", "hệ_điều_hành"), ("update", "hệ_điều_hành"),
-        ("giao diện", "hệ_điều_hành"),
-        
-        # PHỤ KIỆN
-        ("sạc không dây", "phụ_kiện"), ("củ sạc", "phụ_kiện"),
-        ("tai nghe", "phụ_kiện"), ("ốp lưng", "phụ_kiện"),
-        ("cường lực", "phụ_kiện"), ("cáp sạc", "phụ_kiện"),
-        ("phụ kiện", "phụ_kiện"), ("bảo hành", "phụ_kiện"),
-        ("sạc", "phụ_kiện"), ("cáp", "phụ_kiện"),
-        
-        # PHỤC VỤ
-        ("nhân viên tư vấn", "phục_vụ"), ("nhân viên", "phục_vụ"),
-        ("phục vụ", "phục_vụ"), ("tư vấn", "phục_vụ"), 
-        ("nhiệt tình", "phục_vụ"), ("chu đáo", "phục_vụ"),
-        ("thái độ", "phục_vụ"), ("giao hàng", "phục_vụ"),
-        ("shipper", "phục_vụ"), ("đóng gói", "phục_vụ")
+        ("giao diện", "hệ_điều_hành")
     ]
 
     for text in sample:
@@ -410,9 +398,9 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
                     last_known_price = history_dict[d_str]
                 final_prices.append(last_known_price)
 
-            # --- BƯỚC 3: DỰ BÁO GIÁ BẰNG LSTM ---
+            # --- BƯỚC 3: DỰ BÁO GIÁ BẰNG LSTM (Model tổng quát) ---
             forecast = 0
-            if brand in lstm_models and final_prices:
+            if lstm_model is not None and scaler is not None and final_prices:
                 try:
                     # Sử dụng chuỗi giá đã được làm sạch và bù đắp để dự báo
                     # Đảm bảo đủ độ dài LOOK_BACK bằng cách padding nếu cần
@@ -421,9 +409,9 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
                         input_prices = [input_prices[0]] * (LOOK_BACK - len(input_prices)) + input_prices
                     
                     X_input = np.array(input_prices[-LOOK_BACK:]).reshape(-1, 1)
-                    X_scaled = scalers[brand].transform(X_input)
-                    pred = lstm_models[brand].predict(X_scaled.reshape(1, LOOK_BACK, 1), verbose=0)
-                    forecast = int(scalers[brand].inverse_transform(pred)[0][0])
+                    X_scaled = scaler.transform(X_input)
+                    pred = lstm_model.predict(X_scaled.reshape(1, LOOK_BACK, 1), verbose=0)
+                    forecast = int(scaler.inverse_transform(pred)[0][0])
                 except Exception as e:
                     print(f"Lỗi dự báo {plat_names[i]}: {e}")
 
@@ -464,3 +452,5 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)
 # uvicorn main:app --reload
+# python -m uvicorn main:app --reload
+# .\mongorestore.exe --host localhost --port 27017 --archive="init-db\data_backup.archive" --nsInclude="*"
