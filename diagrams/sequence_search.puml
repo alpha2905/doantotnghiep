@@ -1,0 +1,62 @@
+@startuml sequence_search
+skinparam backgroundColor #F5F5F5
+
+actor User
+participant "React\nFrontend" as frontend
+participant "FastAPI\nBackend" as backend
+participant "MongoDB" as db
+participant "AI\nServices" as ai
+
+User -> frontend: Enter product name
+activate frontend
+frontend -> backend: GET /search?q=iphone14
+deactivate frontend
+
+activate backend
+backend -> db: Query products (name match)
+activate db
+db --> backend: Return product list
+deactivate db
+
+backend -> db: Get price_history for products
+activate db
+db --> backend: Price history (5-7 days)
+deactivate db
+
+backend -> db: Get sentiment_analysis
+activate db
+db --> backend: Sentiment scores by aspect
+deactivate db
+
+backend -> db: Get forecast_results
+activate db
+db --> backend: Forecast prices & direction
+deactivate db
+
+backend -> db: Get product_quality_score
+activate db
+db --> backend: PQS scores (0-100)
+deactivate db
+
+backend -> ai: Calculate recommendation
+activate ai
+ai --> backend: Buy now / Buy / Wait / Consider / Not recommended
+deactivate ai
+
+backend -> frontend: Return JSON (products + prices + analysis)
+deactivate backend
+
+activate frontend
+frontend -> User: Display results:
+note right
+- Product list
+- Prices from 3 platforms
+- Price chart
+- PQS score (grade: A/B/C/D/F)
+- Sentiment %
+- Forecast price
+- Recommendation
+end note
+deactivate frontend
+
+@enduml

@@ -1,0 +1,83 @@
+@startuml sequence_crawl
+skinparam backgroundColor #F5F5F5
+
+participant "Scheduler\n(APScheduler)" as scheduler
+participant "Crawler\nModule" as crawler
+participant "Playwright\nBrowser" as browser
+participant "FPT/TGDD/DMX\nWebsite" as website
+participant "BeautifulSoup\nParser" as parser
+participant "MongoDB" as db
+
+scheduler -> crawler: Trigger crawl task
+activate crawler
+
+Note over crawler: Every 4-6 hours
+
+crawler -> browser: Launch headless browser
+activate browser
+
+browser -> website: Navigate to FPT Shop
+activate website
+website --> browser: Return HTML
+deactivate website
+
+browser -> browser: Scroll page\n(lazy load images)
+
+browser -> website: Wait for AJAX/XHR
+activate website
+website --> browser: Dynamic content loaded
+deactivate website
+
+browser --> crawler: Return HTML/DOM
+deactivate browser
+
+activate parser
+crawler -> parser: Parse HTML with BeautifulSoup
+parser -> parser: Extract:
+note right
+- product.name
+- product.price
+- product.image_url
+- product.url
+- product.comments[]
+- product.rating
+- product.sales_count
+end note
+
+parser --> crawler: Structured data
+deactivate parser
+
+crawler -> crawler: Normalize data:
+note right
+- clean_product_name()
+- parse_price()
+- extract_model_base()
+- merge platforms
+end note
+
+crawler -> db: Upsert products
+activate db
+db -> db: Check if URL exists
+alt Product exists
+    db -> db: Update price_number
+    db -> db: Push to price_history
+else Product is new
+    db -> db: Insert new product
+    db -> db: Initialize price_history
+end
+db --> crawler: Acknowledged
+deactivate db
+
+Note over crawler: Repeat for TGDD, DMX
+
+crawler -> crawler: Trigger AI analysis
+note right
+- PhoBERT sentiment analysis
+- LSTM price forecasting
+- PQS calculation
+end note
+
+crawler --> scheduler: Crawl complete
+deactivate crawler
+
+@enduml

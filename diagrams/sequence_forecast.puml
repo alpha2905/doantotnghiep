@@ -1,0 +1,139 @@
+@startuml sequence_forecast
+skinparam backgroundColor #F5F5F5
+
+participant "MongoDB" as db
+participant "LSTM Service\n(Forecasting)" as lstm_svc
+participant "Data\nProcessor" as processor
+participant "LSTM\nModel" as lstm_model
+participant "Post\nProcessor" as post
+participant "MongoDB" as db2
+
+db -> lstm_svc: Get price_history (5-7 days)
+activate lstm_svc
+activate db
+db --> lstm_svc: Prices array with dates
+deactivate db
+
+lstm_svc -> processor: Raw price data
+activate processor
+
+processor -> processor: Data Cleaning:
+note right
+- Remove null/NaN values
+- Handle missing dates
+- Remove statistical outliers
+  (Z-score > 3)
+- Interpolate missing values
+end note
+
+processor -> processor: Data Normalization
+note right
+Using StandardScaler fitted on
+training data:
+normalized = (price - mean) / std
+end note
+
+processor -> processor: Sequence Preparation
+note right
+Given prices: [p0, p1, p2, p3, p4, p5, p6]
+Create sequence for LSTM:
+X = [p0, p1, p2, p3, p4]  (look_back=5)
+y = p5  (predict p5)
+X is reshaped to (1, 5, 1)
+end note
+
+processor --> lstm_svc: Normalized sequence
+deactivate processor
+
+lstm_svc -> lstm_model: Forward pass
+activate lstm_model
+
+note right
+Architecture:
+Input: (batch=1, seq_len=5, features=1)
+  ↓
+LSTM(128 units, dropout=0.2)
+  ↓
+LSTM(64 units, dropout=0.2)
+  ↓
+Dense(32, ReLU)
+  ↓
+Output Dense(1, Linear)
+  ↓
+Raw prediction (normalized)
+end note
+
+lstm_model --> lstm_svc: Normalized forecast
+deactivate lstm_model
+
+lstm_svc -> post: Post-processing
+activate post
+
+post -> post: Inverse Normalization
+note right
+actual_forecast = 
+  (normalized_forecast * std) + mean
+end note
+
+post -> post: Calculate Metrics
+note right
+Compare forecast with recent
+actual prices to get:
+- MAE (Mean Absolute Error)
+- RMSE (Root Mean Squared Error)
+- MAPE (Mean Absolute 
+  Percentage Error)
+end note
+
+post -> post: Determine Direction
+note right
+price_change = 
+  (forecast - current) / current * 100%
+
+IF change >= 5%: "UP_SHARP" ⬆
+IF 1% <= change < 5%: "UP_MILD" ↗
+IF -1% < change < 1%: "STABLE" ↔
+IF -5% < change <= -1%: "DOWN_MILD" ↘
+IF change <= -5%: "DOWN_SHARP" ⬇
+end note
+
+post --> lstm_svc: Forecast result object
+deactivate post
+
+lstm_svc -> db2: Save forecast_results
+activate db2
+note right
+{
+  product_id: ObjectId,
+  forecast_date: ISODate,
+  forecast_price: 15,500,000,
+  actual_price: 15,200,000,
+  mae: 450,000,
+  mape: 2.8,
+  direction: "UP_MILD",
+  confidence: 0.78,
+  look_back_days: 5
+}
+end note
+
+db2 --> lstm_svc: Acknowledged
+deactivate db2
+
+lstm_svc -> db2: Trigger Recommendation Engine
+activate db2
+note right
+Combine:
+- forecast_direction
+- current_price vs avg_price
+- product_quality_score (PQS)
+
+→ Generate recommendation
+end note
+
+db2 --> lstm_svc: Recommendation saved
+deactivate db2
+
+lstm_svc --> lstm_svc: Forecasting complete
+deactivate lstm_svc
+
+@enduml

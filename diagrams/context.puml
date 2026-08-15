@@ -1,0 +1,67 @@
+@startuml context_diagram
+!define AWSPUML https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v14.0/dist
+skinparam linetype ortho
+skinparam backgroundColor #FFFFFF
+skinparam defaultFontName "Segoe UI"
+
+' ===== TÁC NHÂN BÊN NGOÀI =====
+actor "Người Dùng\n(Customer)" as user
+
+' ===== 8 SÀN THƯƠNG MẠI ĐIỆN TỬ =====
+package "Sàn Thương Mại Điện Tử" {
+    component "FPT Shop" as fpt
+    component "Thế Giới Di Động" as tgdd
+    component "CellphoneS" as cellphones
+    component "Hoàng Hà Mobile" as hoangha
+    component "Di Động Việt" as didongviet
+    component "Viettel Store" as viettel
+    component "Clickbuy" as clickbuy
+    component "MobileCity" as mobilecity
+}
+
+' ===== HỆ THỐNG TRUNG TÂM =====
+package "Hệ Thống So Sánh Giá Điện Thoại\n(AI Price Comparison)" {
+    component "Web Interface\n(React)" as web
+    component "Backend API\n(FastAPI)" as api
+    component "Crawler Module" as crawler
+    component "AI Module\n(PhoBERT + LSTM + PQS)" as ai
+    component "Recommendation\nEngine" as rec
+}
+
+' ===== KHO DỮ LIỆU =====
+database "MongoDB" as db
+
+' ===== LUỒNG DỮ LIỆU CHÍNH =====
+user --> web : "1. Truy vấn tìm kiếm\n2. Yêu cầu so sánh giá"
+web --> api : "Gửi yêu cầu (REST API)"
+api --> db : "Đọc dữ liệu sản phẩm,\ngiá, bình luận"
+api --> ai : "Phân tích cảm xúc,\ndự báo giá, tính PQS"
+ai --> rec : "Tính điểm khuyến nghị"
+rec --> api : "Kết quả khuyến nghị"
+api --> web : "Trả kết quả so sánh,\nPQS, dự báo, khuyến nghị"
+web --> user : "Hiển thị kết quả"
+
+' ===== LUỒNG CRAWL DỮ LIỆU =====
+api --> crawler : "Kích hoạt crawl định kỳ"
+crawler --> fpt : "Crawl sản phẩm, giá, bình luận"
+crawler --> tgdd : "Crawl sản phẩm, giá, bình luận"
+crawler --> cellphones : "Crawl sản phẩm, giá, bình luận"
+crawler --> hoangha : "Crawl sản phẩm, giá, bình luận"
+crawler --> didongviet : "Crawl sản phẩm, giá, bình luận"
+crawler --> viettel : "Crawl sản phẩm, giá, bình luận"
+crawler --> clickbuy : "Crawl sản phẩm, giá, bình luận"
+crawler --> mobilecity : "Crawl sản phẩm, giá, bình luận"
+
+fpt -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+tgdd -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+cellphones -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+hoangha -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+didongviet -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+viettel -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+clickbuy -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+mobilecity -.-> crawler : "Dữ liệu sản phẩm, giá, đánh giá"
+
+crawler --> db : "Lưu trữ dữ liệu đã crawl"
+ai --> db : "Lưu kết quả phân tích,\ndự báo, PQS"
+
+@enduml

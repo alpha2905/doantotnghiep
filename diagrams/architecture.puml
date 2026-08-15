@@ -1,0 +1,85 @@
+@startuml architecture_diagram
+!define AWSPUML https://raw.githubusercontent.com/awslabs/aws-icons-for-plantuml/v14.0/dist
+skinparam linetype ortho
+skinparam backgroundColor #F5F5F5
+
+package "Presentation Layer" {
+    component "React.js Frontend" as react {
+        component "Search UI" as search_ui
+        component "Charts (Recharts)" as charts
+        component "Dashboard" as dashboard
+    }
+    component "Mobile (Flutter-Future)" as flutter
+}
+
+package "Application Layer" {
+    component "FastAPI Backend" as fastapi {
+        component "Auth Service (Firebase)" as auth
+        component "Product Service" as prod_svc
+        component "Search Service" as search_svc
+        component "Recommendation Service" as rec_svc
+    }
+    
+    component "Crawler Module" as crawler {
+        component "Playwright Browser" as playwright
+        component "BeautifulSoup Parser" as bs
+        component "FPT Crawler" as fpt_c
+        component "TGDD Crawler" as tgdd_c
+        component "DMX Crawler" as dmx_c
+    }
+    
+    component "AI Module" as ai {
+        component "PhoBERT Service" as phobert
+        component "LSTM Service" as lstm
+        component "PQS Calculator" as pqs
+    }
+    
+    component "Scheduler" as scheduler {
+        component "APScheduler" as apscheduler
+    }
+}
+
+package "Data Layer" {
+    database "MongoDB" as mongo {
+        database "products" as col_products
+        database "price_history" as col_prices
+        database "comments" as col_comments
+        database "sentiment_analysis" as col_sentiment
+        database "forecast_results" as col_forecast
+        database "product_quality_score" as col_pqs
+        database "recommendations" as col_rec
+    }
+    
+    component "Model Storage" as storage {
+        component "LSTM Models (.keras)" as lstm_model
+        component "Scalers (.pkl)" as scalers
+        component "PhoBERT Weights" as phobert_w
+    }
+}
+
+react --> fastapi : REST API
+flutter -.-> fastapi : REST API
+fastapi --> mongo : Query/Insert
+
+crawler --> playwright : Control browser
+playwright --> fpt_c : Navigate
+playwright --> tgdd_c : Navigate
+playwright --> dmx_c : Navigate
+playwright --> bs : Parse HTML
+
+fastapi --> crawler : Trigger crawl
+crawler --> mongo : Upsert products
+
+fastapi --> ai : Process data
+ai --> phobert : Sentiment classification
+ai --> lstm : Price prediction
+ai --> pqs : Quality scoring
+ai --> mongo : Store results
+
+scheduler --> crawler : Schedule crawlers
+scheduler --> ai : Schedule AI tasks
+
+phobert --> storage : Load PhoBERT
+lstm --> storage : Load LSTM models & scalers
+
+@enduml

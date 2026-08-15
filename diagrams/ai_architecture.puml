@@ -1,0 +1,75 @@
+@startuml ai_architecture
+!theme plain
+title Kien Truc Mo Hinh AI
+
+' ===== AI PIPELINE 1: SENTIMENT & ASPECT (PhoBERT) =====
+package "Pipeline 1: Phan Tich Cam Xuc & Khia Canh (PhoBERT)" {
+  rectangle "Input: Comment Text (Tieng Viet)" as input1
+  rectangle "Text Preprocessing\nRemove punctuation\nLowercase\nNormalize" as prep1
+  rectangle "Tokenization\n(PhoBERT Tokenizer)" as token1
+  rectangle "PhoBERT-base-v2\n(embedding)" as embed1
+  rectangle "Sentiment Model\n3 labels\npositive / neutral / negative" as sent_model
+  rectangle "Aspect Model\n10 labels\n(bao_mat, camera, gia,\nhieu_nang, he_dieu_hanh,\nkhac, loa_am_thanh,\nman_hinh, pin, thiet_ke)" as asp_model
+  rectangle "Rule-based\nSentiment keywords\nAspect keywords\n(uu tien cao)" as rule1
+  rectangle "Output:\nSentiment % (pos/neu/neg)\n+ Aspects + RQS" as out1
+
+  input1 --> prep1
+  prep1 --> token1
+  token1 --> embed1
+  embed1 --> sent_model
+  embed1 --> asp_model
+  sent_model --> rule1
+  asp_model --> rule1
+  rule1 --> out1
+}
+
+' ===== AI PIPELINE 2: PRICE FORECASTING (LSTM) =====
+package "Pipeline 2: Du Bao Gia (LSTM)" {
+  rectangle "Input: Price History\n(6-7 ngay)" as input2
+  rectangle "Data Cleaning\nLoc gia hop le\nGom theo ngay\nGiu gia cuoi ngay" as clean2
+  rectangle "Normalization\n(MinMaxScaler)" as norm2
+  rectangle "Sequence Preparation\nLOOK_BACK = 5" as seq2
+  rectangle "LSTM Model (Tong quat)\nLSTM(64, return_seq)\nDropout(0.2)\nLSTM(32)\nDense(1)\nLoss: MSE, Opt: Adam" as lstm2
+  rectangle "Inverse Scaling\n(denormalize)" as inv2
+  rectangle "Output:\nForecast Price\n+ Trend\n+ LSTM Metrics\n(MAE / RMSE / MAPE)" as out2
+
+  input2 --> clean2
+  clean2 --> norm2
+  norm2 --> seq2
+  seq2 --> lstm2
+  lstm2 --> inv2
+  inv2 --> out2
+}
+
+' ===== AI PIPELINE 3: RECOMMENDATION ENGINE =====
+package "Pipeline 3: Recommendation Engine" {
+  rectangle "Input: PQS + Price Stats\n+ Forecast" as input3
+  rectangle "Logic quyet dinh mua\nBUY NOW / BUY / WAIT\nCONSIDER / NOT RECOMMENDED" as rule3
+  rectangle "Output:\nKhuyen nghi mua\n+ Ly do" as out3
+
+  input3 --> rule3
+  rule3 --> out3
+}
+
+' ===== PQS CALCULATOR =====
+package "PQS Calculator (Product Quality Score)" {
+  rectangle "Rating trung binh\n(25%)" as pqs1
+  rectangle "Sentiment Score\n(30%)" as pqs2
+  rectangle "Uy tin gian hang\n(15%)" as pqs3
+  rectangle "So luong ban\n(15%)" as pqs4
+  rectangle "Ty le tich cuc\n(15%)" as pqs5
+  rectangle "PQS (0-100)" as pqs_out
+
+  pqs1 --> pqs_out
+  pqs2 --> pqs_out
+  pqs3 --> pqs_out
+  pqs4 --> pqs_out
+  pqs5 --> pqs_out
+}
+
+' ===== QUAN HE GIUA CAC PIPELINE =====
+out1 --> pqs2 : sentiment_score
+out2 --> rule3 : forecast_price
+pqs_out --> rule3 : pqs_score
+
+@enduml

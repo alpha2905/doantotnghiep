@@ -104,7 +104,8 @@ Cấu hình môi trường:
 ═══════════════════════════════════════════════════════════════════════════════
 
 Backend (backend/main.py):
-    - MongoDB URI: mongodb://localhost:27017
+    - MongoDB URI: mongodb+srv://22050040_db_user:Accnam55@giasanpham.uqyaw1p.mongodb.net/?appName=GiaSanPham
+    - MongoDB DB: price_tracker
     - API Port: 8000
     - LSTM LOOK_BACK: 5 ngày
     - BRANDS: iphone, samsung, oppo, xiaomi
@@ -122,8 +123,8 @@ Scheduler:
 ═══════════════════════════════════════════════════════════════════════════════
 
 Lỗi MongoDB:
-    - Kiểm tra: netstat -ano | findstr 27017
-    - Khởi động: mongod
+    - Kiểm tra kết nối: mongosh "mongodb+srv://22050040_db_user:Accnam55@giasanpham.uqyaw1p.mongodb.net/?appName=GiaSanPham"
+    - Đảm bảo IP được whitelist trong MongoDB Atlas
 
 Lỗi ChromeDriver:
     - Cập nhật: pip install --upgrade webdriver-manager

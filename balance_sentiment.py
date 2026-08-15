@@ -1,10 +1,10 @@
-﻿import json
+﻿﻿import json
 import random
 from collections import defaultdict
 
 # Đọc file
 input_file = r"data\phobert_train_sentiment.jsonl"
-output_file = r"data\phobert_train_sentiment.jsonl"
+output_file = r"data\phobert_train_sentiment_balanced.jsonl"
 
 # Đọc và phân loại dữ liệu
 sentiment_data = defaultdict(list)

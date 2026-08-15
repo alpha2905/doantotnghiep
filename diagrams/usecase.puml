@@ -1,0 +1,44 @@
+@startuml usecase_diagram
+skinparam backgroundColor #F5F5F5
+left to right direction
+
+actor "User\n(Khách Hàng)" as user
+actor "System\n(Scheduler)" as system
+
+rectangle "Smart Shopping Assistant" {
+    usecase "UC1: Search Products" as UC1
+    usecase "UC2: View PQS Score" as UC2
+    usecase "UC3: View Price History" as UC3
+    usecase "UC4: View Sentiment Analysis" as UC4
+    usecase "UC5: View Price Forecast" as UC5
+    usecase "UC6: Get Buy Recommendation" as UC6
+    usecase "UC7: Compare Multi-Platform" as UC7
+    
+    usecase "UC8: Crawl Data" as UC8
+    usecase "UC9: Sentiment Analysis" as UC9
+    usecase "UC10: Price Forecasting" as UC10
+}
+
+user --> UC1 : search product
+user --> UC2 : view scores
+user --> UC3 : view history
+user --> UC4 : view sentiment
+user --> UC5 : view forecast
+user --> UC6 : get recommendation
+user --> UC7 : compare prices
+
+UC1 --> UC2 : include
+UC1 --> UC3 : include
+UC1 --> UC4 : include
+UC1 --> UC5 : include
+UC1 --> UC6 : include
+UC1 --> UC7 : include
+
+system --> UC8 : schedule
+system --> UC9 : execute
+system --> UC10 : execute
+
+UC8 .> UC9 : <<extend>>
+UC8 .> UC10 : <<extend>>
+
+@enduml

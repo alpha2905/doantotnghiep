@@ -27,14 +27,6 @@ if %errorlevel% neq 0 (
 
 echo ✅ Python đã sẵn sàng
 
-:: Kiểm tra MongoDB
-mongod --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo ⚠️  Cảnh báo: MongoDB chưa được cài đặt
-    echo 🌐 Vui lòng cài đặt MongoDB tại https://mongodb.com
-    echo.
-)
-
 :: Kiểm tra dependencies
 echo 🔄 Kiểm tra dependencies...
 pip show fastapi >nul 2>&1
@@ -45,18 +37,7 @@ if %errorlevel% neq 0 (
 
 echo ✅ Dependencies đã sẵn sàng
 echo.
-
-:: Mở MongoDB nếu chưa chạy
-echo 🔍 Kiểm tra MongoDB...
-netstat -ano | findstr ":27017" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo 🟡 MongoDB chưa chạy. Đang khởi động...
-    start "MongoDB Server" cmd /k mongod
-    timeout /t 5 /nobreak >nul
-    echo ✅ MongoDB đã khởi động
-) else (
-    echo ✅ MongoDB đang chạy
-)
+echo ✅ Sử dụng MongoDB Atlas (Cloud) - không cần MongoDB local
 echo.
 
 :: Khởi động Backend
@@ -89,7 +70,6 @@ echo ║  📍 Truy cập: http://127.0.0.1:8000/docs                        ║
 echo ║  📊 API: http://127.0.0.1:8000/api/compare                       ║
 echo ║                                                                   ║
 echo ║  🔧 Các cửa sổ đang chạy:                                         ║
-echo ║     - MongoDB Server (Database)                                  ║
 echo ║     - FastAPI Server (Backend API)                               ║
 echo ║     - Start.bat (Script chính)                                   ║
 echo ╚══════════════════════════════════════════════════════════════════╝
@@ -103,7 +83,6 @@ pause >nul
 :: Dừng các process khi thoát
 echo.
 echo 🛑 Đang dừng hệ thống...
-taskkill /F /FI "WINDOWTITLE eq MongoDB Server" >nul 2>&1
 taskkill /F /FI "WINDOWTITLE eq FastAPI Server" >nul 2>&1
 echo ✅ Đã dừng tất cả services!
 echo.

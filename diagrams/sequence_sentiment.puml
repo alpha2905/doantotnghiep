@@ -1,0 +1,103 @@
+@startuml sequence_sentiment
+skinparam backgroundColor #F5F5F5
+
+participant "MongoDB" as db
+participant "AI Service\n(Sentiment)" as ai
+participant "Text\nPreprocessor" as prep
+participant "PhoBERT\nTokenizer" as tokenizer
+participant "PhoBERT\nModel" as model
+participant "Post\nProcessor" as post
+participant "MongoDB" as db2
+
+db -> ai: Fetch unprocessed comments
+activate ai
+
+ai -> prep: Raw Vietnamese text
+activate prep
+
+prep -> prep: Remove punctuation
+prep -> prep: Lowercase
+prep -> prep: Normalize Vietnamese diacritics
+
+prep --> ai: Cleaned text
+deactivate prep
+
+ai -> tokenizer: Tokenize with PhoBERT
+activate tokenizer
+tokenizer --> ai: Token IDs + Attention Masks
+deactivate tokenizer
+
+ai -> model: Forward pass
+activate model
+note right
+Input: [CLS] token1 token2 ... tokenN [SEP]
+Output: Logits for 3 classes
+- Positive (Tích cực)
+- Negative (Tiêu cực)  
+- Neutral (Trung lập)
+end note
+
+model --> ai: Logits + Embeddings
+deactivate model
+
+ai -> post: Softmax + Post-processing
+activate post
+
+post -> post: Get confidence scores
+post -> post: Extract sentiment label\n(argmax)
+
+post -> post: Rule-based aspect detection:
+note right
+- Keywords: camera, ảnh, lens → CAMERA
+- Keywords: pin, dung lượng → BATTERY
+- Keywords: màn hình, display → SCREEN
+- Keywords: giá, đắt → PRICE
+- Keywords: tốc độ, lag → PERFORMANCE
+- Keywords: thiết kế → DESIGN
+end note
+
+post -> post: Calculate Review Quality Score (RQS)
+note right
+RQS = 0.4*normalized_sentiment
+    + 0.4*normalized_rating
+    + 0.2*normalized_length
+end note
+
+post --> ai: Final result object
+deactivate post
+
+ai -> db2: Save sentiment_analysis
+activate db2
+note right
+{
+  comment_id: ObjectId,
+  sentiment: "positive",
+  confidence: 0.92,
+  aspects: ["camera", "price"],
+  rqs: 8.5,
+  processed_date: ISODate
+}
+end note
+
+db2 --> ai: Acknowledged
+deactivate db2
+
+ai -> db2: Update product_quality_score
+activate db2
+note right
+Recalculate PQS for product:
+- rating_avg
+- sentiment_score
+- shop_reliability
+- sales_count
+- positive_ratio
+- Final grade (A/B/C/D/F)
+end note
+
+db2 --> ai: Updated
+deactivate db2
+
+ai --> ai: Processing complete
+deactivate ai
+
+@enduml

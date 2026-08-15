@@ -1,0 +1,240 @@
+@startuml data_model
+!theme plain
+title Sơ Đồ Cấu Trúc Dữ Liệu MongoDB (Data Model Diagram)
+
+' ===== DATABASE =====
+package "Database: price_tracker" {
+
+  ' ===== 8 COLLECTION SẢN PHẨM THEO SÀN =====
+  package "Collection: fpt (FPT Shop)" {
+    entity "fpt" as fpt {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String (iphone/samsung/oppo/xiaomi)
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int (giá thô)
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int (giá dự báo LSTM)
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: tgdd (Thế Giới Di Động)" {
+    entity "tgdd" as tgdd {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: cellphones (CellphoneS)" {
+    entity "cellphones" as cellphones {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: hoangha (Hoàng Hà Mobile)" {
+    entity "hoangha" as hoangha {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: didongviet (Di Động Việt)" {
+    entity "didongviet" as didongviet {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: viettelstore (Viettel Store)" {
+    entity "viettelstore" as viettelstore {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: clickbuy (Clickbuy)" {
+    entity "clickbuy" as clickbuy {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  package "Collection: mobilecity (MobileCity)" {
+    entity "mobilecity" as mobilecity {
+      * _id: ObjectId <<PK>>
+      --
+      platform: String
+      brand: String
+      name: String
+      model_base: String
+      price_number: Int
+      price: String/Int
+      image / image_url: String (URL)
+      url / product_url: String <<UK>>
+      rating: Float (0-5)
+      sold: Int
+      shop_reputation: Float (0-100)
+      comments: Array[String]
+      price_history: Array[Object]
+        [{scraped_at: Date, price: Int}]
+      forecast: Int
+      last_crawl: Date
+      last_scraped_at: Date
+    }
+  }
+
+  ' ===== COLLECTION: USERS =====
+  package "Collection: users" {
+    entity "users" as users {
+      * _id: ObjectId <<PK>>
+      --
+      email: String <<UK>>
+      password_hash: String (bcrypt)
+      full_name: String
+      favorites: Array[Object]
+        [{platform, name, current_price,
+          forecast, image, link,
+          added_pqs, added_at}]
+      fcm_tokens: Array[String]
+      created_at: Date
+    }
+  }
+
+  ' ===== COLLECTION: NOTIFICATIONS =====
+  package "Collection: notifications" {
+    entity "notifications" as notifications {
+      * _id: ObjectId <<PK>>
+      --
+      user_id: String (FK -> users._id)
+      key: String <<UK>>
+      type: String
+        (price_drop|deep_drop|below_avg|
+         forecast_up|pqs_up|negative_comments)
+      title: String
+      message: String
+      product: Object
+      created_at: Date
+      read: Boolean
+    }
+  }
+
+  ' ===== QUAN HỆ =====
+  users ||--o{ notifications : "1 - N (user_id)"
+}
+
+@enduml

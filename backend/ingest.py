@@ -8,14 +8,14 @@ from backend import schema
 
 async def ingest_records(mongo_uri: str, platform: str, brand: str, file_path: str, collection_override: str = None):
     client = AsyncIOMotorClient(mongo_uri)
+    db = client["price_tracker"]
     db_map = {
-        "fpt": client.fpt_database,
-        "tgdd": client.tgdd_database,
-        "dmx": client.dmx_database,
+        "fpt": db,
+        "tgdd": db,
+        "dmx": db,
     }
     if platform not in db_map:
         raise ValueError(f"Unknown platform: {platform}")
-    db = db_map[platform]
 
     is_jsonl = file_path.lower().endswith(".jsonl") or file_path.lower().endswith(".ndjson")
     count = 0
@@ -62,7 +62,7 @@ def main():
     parser.add_argument("--file", "-f", required=True, help="Path to JSON or JSONL file to ingest")
     parser.add_argument("--platform", "-p", required=True, choices=["fpt", "tgdd", "dmx"], help="Platform key (fpt|tgdd|dmx)")
     parser.add_argument("--brand", "-b", required=True, help="Brand key (iphone|samsung|oppo|xiaomi, etc.)")
-    parser.add_argument("--mongo", default="mongodb://localhost:27017", help="MongoDB URI")
+    parser.add_argument("--mongo", default="mongodb+srv://22050040_db_user:Accnam55@giasanpham.uqyaw1p.mongodb.net/?appName=GiaSanPham", help="MongoDB URI")
     parser.add_argument("--collection", default=None, help="Optional collection name override")
 
     args = parser.parse_args()
