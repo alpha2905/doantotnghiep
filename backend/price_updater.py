@@ -129,7 +129,7 @@ async def price_updater_loop(interval_hours: int = 1, dry_run: bool = False, use
 
 def main():
     parser = argparse.ArgumentParser(description="Hourly price updater for LSTM training data")
-    parser.add_argument("--interval", "-i", type=int, default=1, help="Update interval in hours (default: 1)")
+    parser.add_argument("--interval", "-i", type=int, default=3, help="Update interval in hours (default: 3)")
     parser.add_argument("--dry-run", action="store_true", help="Run without writing to DB")
     parser.add_argument("--once", action="store_true", help="Run once and exit")
     parser.add_argument("--mongo", default=None, help="MongoDB URI override")

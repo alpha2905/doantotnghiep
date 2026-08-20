@@ -170,9 +170,9 @@ async def lifespan(app: FastAPI):
     # Khởi tạo Firebase Admin (nếu có credentials)
     firebase_helper.init_firebase()
 
-    # Khởi chạy background task cập nhật giá mỗi giờ để phục vụ training LSTM
-    background_price_task = asyncio.create_task(price_updater.price_updater_loop(interval_hours=1))
-    print("⏰ Background price updater started: will update all products every 1 hour")
+    # Khởi chạy background task cập nhật giá mỗi 3 giờ để phục vụ training LSTM
+    background_price_task = asyncio.create_task(price_updater.price_updater_loop(interval_hours=3))
+    print("⏰ Background price updater started: will update all products every 3 hours")
 
     yield
 

@@ -54,7 +54,7 @@ Add these secrets to your GitHub repo (Settings → Secrets and variables → Ac
 - `BACKEND_URL`: `https://your-service.onrender.com`
 - `ADMIN_API_KEY`: same as your `ADMIN_API_KEY` env var
 
-The workflow `.github/workflows/price-update.yml` will automatically run every hour.
+The workflow `.github/workflows/price-update.yml` will automatically run every 3 hours.
 
 ### Test Manually
 
