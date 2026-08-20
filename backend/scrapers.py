@@ -306,7 +306,11 @@ async def update_product_real_price(db, product: Dict[str, Any], price_data: Dic
     return True
 
 
-async def update_prices_real(db, product_limit: int = 200):
+async def update_prices_real(db, product_limit: int = 0):
+    """Update real prices for all products (or up to product_limit if > 0).
+
+    product_limit <= 0 means ALL products in the collection.
+    """
     now = datetime.now(timezone.utc)
     updated_count = 0
     failed_count = 0
@@ -314,8 +318,10 @@ async def update_prices_real(db, product_limit: int = 200):
     async with aiohttp.ClientSession() as session:
         for source, collection_name in STORE_COLLECTIONS.items():
             col = db[collection_name]
-            cursor = col.find({}).limit(product_limit)
-            products = await cursor.to_list(length=product_limit)
+            cursor = col.find({})
+            if product_limit and product_limit > 0:
+                cursor = cursor.limit(product_limit)
+            products = await cursor.to_list(length=product_limit if product_limit and product_limit > 0 else None)
 
             for p in products:
                 product_url = p.get("product_url") or p.get("link") or p.get("url") or ""
@@ -369,7 +375,7 @@ async def get_db():
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Real price scraper for e-commerce platforms")
-    parser.add_argument("--limit", type=int, default=200, help="Max products per platform")
+    parser.add_argument("--limit", type=int, default=0, help="Max products per platform (0 = all)")
     parser.add_argument("--mongo", default=None, help="MongoDB URI override")
     parser.add_argument("--db", default=None, help="DB name override")
     args = parser.parse_args()

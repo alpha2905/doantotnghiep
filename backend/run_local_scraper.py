@@ -43,7 +43,8 @@ async def get_db():
     return client[db_name]
 
 
-async def run_once(dry_run: bool = False, limit: int = 200):
+async def run_once(dry_run: bool = False, limit: int = 0):
+    """Chạy scrape giá thật. limit <= 0 nghĩa là TẤT CẢ sản phẩm trong DB."""
     db = await get_db()
     now = datetime.now(timezone.utc)
 
@@ -64,8 +65,10 @@ async def run_once(dry_run: bool = False, limit: int = 200):
         for source, collection_name in STORE_COLLECTIONS.items():
             try:
                 col = db[collection_name]
-                cursor = col.find({}).limit(limit)
-                products = await cursor.to_list(length=limit)
+                cursor = col.find({})
+                if limit and limit > 0:
+                    cursor = cursor.limit(limit)
+                products = await cursor.to_list(length=limit if limit and limit > 0 else None)
                 updated = 0
                 for p in products:
                     product_url = p.get("product_url") or p.get("link") or p.get("url") or ""
@@ -86,7 +89,7 @@ async def run_once(dry_run: bool = False, limit: int = 200):
     return total_updated
 
 
-async def loop(interval_hours: int = 3, dry_run: bool = False, limit: int = 200):
+async def loop(interval_hours: int = 3, dry_run: bool = False, limit: int = 0):
     logger.info(f"[LocalScraper] Chạy lặp mỗi {interval_hours} giờ. dry_run={dry_run}, limit={limit}")
     while True:
         try:
@@ -100,7 +103,7 @@ def main():
     parser = argparse.ArgumentParser(description="Scrape giá thật 8 sàn trên máy local")
     parser.add_argument("--once", action="store_true", help="Chạy 1 lần rồi thoát")
     parser.add_argument("--interval", "-i", type=int, default=3, help="Số giờ giữa các lần chạy (mặc định: 3)")
-    parser.add_argument("--limit", type=int, default=200, help="Tối đa sản phẩm mỗi sàn (mặc định: 200)")
+    parser.add_argument("--limit", type=int, default=0, help="Tối đa sản phẩm mỗi sàn (0 = tất cả, mặc định)")
     parser.add_argument("--dry-run", action="store_true", help="Không ghi vào DB")
     parser.add_argument("--mongo", default=None, help="MongoDB URI override")
     parser.add_argument("--db", default=None, help="Tên database override")
