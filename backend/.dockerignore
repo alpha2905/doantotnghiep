@@ -1,18 +1,21 @@
-# Bỏ qua môi trường ảo (Cực nặng)
-venv/
-.venv/
-env/
-
-# Bỏ qua bộ nhớ đệm Python
 __pycache__/
 *.pyc
 *.pyo
-*.pyd
-
-# Bỏ qua dữ liệu cục bộ và rác IDE
-.vscode/
-.idea/
 .git/
+.gitignore
+node_modules/
+venv/
 mongo_data/
-*.archive
-*.log
+backend_server.log
+firebase-debug.log
+*.keras
+*.pth
+*.pkl
+phobert_models/
+models/
+init-db/
+data/
+diagrams/
+model/
+mobile/
+frontend/

@@ -209,13 +209,15 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
       <div className="forecast-section">
         <div className="forecast-header">
           <span>🔮 Dự báo giá LSTM</span>
-          <span className="forecast-price">Giá dự báo: {formatPrice(product.forecast)}</span>
+          <span className="forecast-price">
+            {lstmMetrics ? `Chính xác dự báo: ${lstmMetrics.accuracy}%` : ''} • Giá dự báo: {formatPrice(product.forecast)}
+          </span>
         </div>
         <div className="chart-container">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 0, left: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--chart-grid)" />
-              <XAxis dataKey="name" tick={{ fontSize: 10, fill: 'var(--chart-text)' }} tickLine={false} axisLine={false} />
+              <XAxis hide />
               <YAxis
                 tick={{ fontSize: 9, fill: 'var(--chart-text)' }}
                 tickLine={false}
@@ -226,14 +228,29 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
               />
               <Tooltip
                 formatter={(value) => [formatPrice(value), 'Giá']}
+                labelFormatter={() => ''}
                 contentStyle={{ borderRadius: 12, border: '1px solid var(--chart-border)', fontSize: 12, background: 'var(--tooltip-bg)', color: 'var(--text-primary)' }}
+              />
+              <ReferenceLine
+                y={priceStats?.max}
+                stroke="var(--red-600)"
+                strokeDasharray="4 4"
+                strokeWidth={1.5}
+                label={{ value: 'Cao nhất', position: 'insideTopRight', fontSize: 9, fill: 'var(--red-600)' }}
               />
               <ReferenceLine
                 y={priceStats?.avg}
                 stroke="var(--blue-600)"
                 strokeDasharray="4 4"
                 strokeWidth={1.5}
-                label={{ value: 'TB', position: 'insideTopRight', fontSize: 9, fill: 'var(--blue-600)' }}
+                label={{ value: 'Trung bình', position: 'insideTopRight', fontSize: 9, fill: 'var(--blue-600)' }}
+              />
+              <ReferenceLine
+                y={priceStats?.min}
+                stroke="var(--green-600)"
+                strokeDasharray="4 4"
+                strokeWidth={1.5}
+                label={{ value: 'Thấp nhất', position: 'insideTopRight', fontSize: 9, fill: 'var(--green-600)' }}
               />
               <Line
                 type="monotone"
@@ -255,11 +272,11 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
           <div className="lstm-grid">
             <div className="lstm-item lstm-mae">
               <div className="lstm-item-label">MAE</div>
-              <div className="lstm-item-value">{formatPrice(lstmMetrics.mae)}</div>
+              <div className="lstm-item-value">{((lstmMetrics.mae / (product.current_price || 1)) * 100).toFixed(2)}%</div>
             </div>
             <div className="lstm-item lstm-rmse">
               <div className="lstm-item-label">RMSE</div>
-              <div className="lstm-item-value">{formatPrice(lstmMetrics.rmse)}</div>
+              <div className="lstm-item-value">{((lstmMetrics.rmse / (product.current_price || 1)) * 100).toFixed(2)}%</div>
             </div>
             <div className="lstm-item lstm-mape">
               <div className="lstm-item-label">MAPE</div>

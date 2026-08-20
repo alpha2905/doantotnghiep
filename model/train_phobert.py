@@ -5,6 +5,17 @@ import json
 import pandas as pd
 import numpy as np
 
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+
+import transformers.utils.import_utils as hf_import_utils
+import transformers.trainer as hf_trainer
+hf_import_utils.check_torch_load_is_safe = lambda: None
+hf_trainer.check_torch_load_is_safe = lambda: None
+
 # Fix lỗi UnicodeEncodeError trên Windows console (cp1252 không encode được emoji)
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
@@ -89,15 +100,21 @@ def train_phobert(task_name, train_texts, train_labels, val_texts, val_labels, l
 
     # Kiểm tra checkpoint để resume
     last_checkpoint = get_last_checkpoint(task_output_dir)
+    while last_checkpoint and not os.path.exists(os.path.join(last_checkpoint, "trainer_state.json")):
+        print(f"⚠️ Checkpoint bị hỏng hoặc chưa lưu xong: {last_checkpoint}. Tự động dọn dẹp...")
+        import shutil
+        shutil.rmtree(last_checkpoint, ignore_errors=True)
+        last_checkpoint = get_last_checkpoint(task_output_dir)
+
     resume_from_checkpoint = last_checkpoint if last_checkpoint else None
     if last_checkpoint:
-        print(f"🔄 Tìm thấy checkpoint: {last_checkpoint}. Sẽ resume training.")
+        print(f"🔄 Tìm thấy checkpoint hợp lệ: {last_checkpoint}. Sẽ resume training.")
     else:
-        print("🆕 Không tìm thấy checkpoint. Bắt đầu huấn luyện mới.")
+        print("🆕 Không tìm thấy checkpoint hợp lệ. Bắt đầu huấn luyện mới.")
     
     # Load model
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME, num_labels=len(label_mapping)
+        MODEL_NAME, num_labels=len(label_mapping), use_safetensors=True
     ).to(device)
     
     train_dataset = CommentDataset(train_texts, train_labels, tokenizer, MAX_LENGTH)

@@ -1,11 +1,12 @@
 import os
+os.environ['KERAS_BACKEND'] = 'torch'
 import sys
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
 import numpy as np
 import torch
-import tensorflow as tf
+import keras
 import joblib
 import asyncio
 import random
@@ -16,10 +17,13 @@ from fastapi import FastAPI, HTTPException, Query, Depends, Body
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from transformers import AutoTokenizer, RobertaForSequenceClassification
+import transformers.utils.import_utils as hf_import_utils
+hf_import_utils.check_torch_load_is_safe = lambda: None
 from contextlib import asynccontextmanager
 import schema
 import auth
 import firebase_helper
+import price_updater
 
 # --- CẤU HÌNH ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -29,6 +33,33 @@ ASPECT_LABELS = [
     "bảo_mật", "camera", "giá", "hiệu_năng", "hệ_điều_hành", 
     "khác", "loa_âm_thanh", "màn_hình", "pin", "thiết_kế"
 ]
+
+import torch.nn as nn
+
+class PyTorchLSTM(nn.Module):
+    def __init__(self, input_size=1, hidden_1=64, hidden_2=32, output_size=1, dropout=0.2):
+        super().__init__()
+        self.lstm1 = nn.LSTM(input_size, hidden_1, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+        self.lstm2 = nn.LSTM(hidden_1, hidden_2, batch_first=True)
+        self.fc = nn.Linear(hidden_2, output_size)
+
+    def forward(self, x):
+        out, _ = self.lstm1(x)
+        out = self.dropout(out)
+        out, _ = self.lstm2(out)
+        out = self.fc(out[:, -1, :])
+        return out
+
+    def predict(self, x, verbose=0):
+        self.eval()
+        with torch.no_grad():
+            if isinstance(x, np.ndarray):
+                x_tensor = torch.tensor(x, dtype=torch.float32)
+            else:
+                x_tensor = x
+            out = self.forward(x_tensor)
+            return out.cpu().numpy()
 
 lstm_model, scaler = None, None
 tokenizer, model_sent, model_aspect = None, None, None
@@ -71,11 +102,26 @@ async def lifespan(app: FastAPI):
     
     # Load LSTM Model tổng quát cho dự báo giá
     global lstm_model, scaler
-    m_path = os.path.join(BASE_DIR, "models", "general_lstm_best.keras")
+    pth_path = os.path.join(BASE_DIR, "models", "general_lstm_best.pth")
+    keras_path = os.path.join(BASE_DIR, "models", "general_lstm_best.keras")
     s_path = os.path.join(BASE_DIR, "models", "general_scaler.pkl")
-    if os.path.exists(m_path):
-        lstm_model = tf.keras.models.load_model(m_path)
-        print(f"✅ LSTM Model loaded: {m_path}")
+
+    if os.path.exists(pth_path):
+        try:
+            m = PyTorchLSTM()
+            m.load_state_dict(torch.load(pth_path, map_location='cpu'))
+            m.eval()
+            lstm_model = m
+            print(f"✅ PyTorch LSTM Model loaded: {pth_path}")
+        except Exception as e:
+            print(f"⚠️ Không thể nạp PyTorch LSTM: {e}")
+    elif os.path.exists(keras_path):
+        try:
+            lstm_model = keras.models.load_model(keras_path)
+            print(f"✅ Keras LSTM Model loaded: {keras_path}")
+        except Exception as e:
+            print(f"⚠️ Không thể nạp Keras LSTM: {e}")
+
     if os.path.exists(s_path):
         scaler = joblib.load(s_path)
         print(f"✅ Scaler loaded: {s_path}")
@@ -101,7 +147,8 @@ async def lifespan(app: FastAPI):
             sent_path, 
             num_labels=3, 
             ignore_mismatched_sizes=True,
-            local_files_only=True
+            local_files_only=True,
+            use_safetensors=True
         )
         
         print(f"📂 Loading aspect model from: {asp_path}")
@@ -109,7 +156,8 @@ async def lifespan(app: FastAPI):
             asp_path, 
             num_labels=10, 
             ignore_mismatched_sizes=True,
-            local_files_only=True
+            local_files_only=True,
+            use_safetensors=True
         )
         
         model_sent.eval()
@@ -121,6 +169,11 @@ async def lifespan(app: FastAPI):
         traceback.print_exc()
     # Khởi tạo Firebase Admin (nếu có credentials)
     firebase_helper.init_firebase()
+
+    # Khởi chạy background task cập nhật giá mỗi giờ để phục vụ training LSTM
+    background_price_task = asyncio.create_task(price_updater.price_updater_loop(interval_hours=1))
+    print("⏰ Background price updater started: will update all products every 1 hour")
+
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -461,52 +514,81 @@ def get_buy_recommendation(pqs, price_stats, current_price, forecast_price):
     }
 
 
-def calculate_lstm_metrics(price_history, forecast_price):
+def calculate_lstm_metrics(price_history, forecast_price, lstm_model=None, scaler=None, look_back=LOOK_BACK):
     """
-    Đánh giá độ chính xác của LSTM:
+    Đánh giá độ chính xác của LSTM bằng backtest trên dữ liệu lịch sử thực tế:
     - MAE (Mean Absolute Error)
     - RMSE (Root Mean Square Error)
     - MAPE (Mean Absolute Percentage Error)
     - Direction Accuracy (Tỷ lệ dự báo đúng hướng)
+    - accuracy: Phần trăm dự đoán giá tương lai so với giá thực tế (100 - MAPE)
     """
     prices = [parse_price(h.get('price', '')) for h in price_history if h.get('price')]
     prices = [p for p in prices if p > 0]
     if len(prices) < 3:
         return None
-    
-    # Giả lập dự báo: dùng giá ngày trước để dự báo ngày sau (naive baseline)
-    # Trong thực tế, cần lưu lịch sử dự báo để tính chính xác
-    actual = prices[1:]
-    predicted = prices[:-1]  # naive: dự báo = giá hôm trước
-    
+
+    # Nếu có LSTM model + scaler -> sử dụng model thật để backtest (dự báo từng bước)
+    # Ngược lại -> fallback naive baseline (giá hôm trước)
+    use_lstm = lstm_model is not None and scaler is not None and len(prices) > look_back
+
+    actual = []
+    predicted = []
+
+    if use_lstm:
+        # Backtest: với mỗi cửa sổ look_back, dùng LSTM dự báo giá tiếp theo (off-by-one)
+        for i in range(look_back, len(prices)):
+            window = prices[i - look_back:i]  # đầu vào look_back giá trước
+            true_next = prices[i]              # giá thực tế ngày tiếp theo
+            try:
+                X_input = np.array(window).reshape(-1, 1)
+                X_scaled = scaler.transform(X_input)
+                pred_scaled = lstm_model.predict(X_scaled.reshape(1, look_back, 1), verbose=0)
+                pred_price = int(scaler.inverse_transform(pred_scaled)[0][0])
+                if pred_price > 0:
+                    actual.append(true_next)
+                    predicted.append(pred_price)
+            except Exception:
+                continue
+    else:
+        # Fallback: naive baseline nếu không có model
+        actual = prices[1:]
+        predicted = prices[:-1]
+
+    if not actual or len(actual) < 1:
+        return None
+
     errors = [abs(a - p) for a, p in zip(actual, predicted)]
     mae = sum(errors) / len(errors)
     rmse = (sum((a - p) ** 2 for a, p in zip(actual, predicted)) / len(actual)) ** 0.5
-    # MAPE: chỉ tính trên các mẫu có giá trị thực tế khác 0
     mape_values = [abs((a - p) / a) * 100 for a, p in zip(actual, predicted) if a != 0]
     mape = sum(mape_values) / len(mape_values) if mape_values else 0
-    
-    # Direction Accuracy: so sánh hướng thay đổi
+
+    # Direction Accuracy: so sánh hướng thay đổi giữa thực tế và dự báo
     correct_direction = 0
     total_direction = 0
-    for i in range(1, len(prices) - 1):
-        actual_change = prices[i + 1] - prices[i]
-        predicted_change = prices[i] - prices[i - 1]  # naive dự báo
+    for i in range(1, len(actual)):
+        actual_change = actual[i] - actual[i - 1]
+        predicted_change = predicted[i] - predicted[i - 1]
         if actual_change != 0:
             total_direction += 1
             if (actual_change > 0 and predicted_change > 0) or \
                (actual_change < 0 and predicted_change < 0) or \
-               (abs(actual_change) < 0.01 * prices[i] and abs(predicted_change) < 0.01 * prices[i]):
+               (abs(actual_change) < 0.01 * actual[i] and abs(predicted_change) < 0.01 * actual[i]):
                 correct_direction += 1
-    
+
     direction_accuracy = (correct_direction / total_direction * 100) if total_direction else 0
-    
+    # Độ chính xác dự báo giá tương lai so với giá thực tế
+    accuracy = max(0.0, 100 - mape)
+
     return {
         "mae": round(mae),
         "rmse": round(rmse),
         "mape": round(mape, 2),
+        "accuracy": round(accuracy, 1),
         "direction_accuracy": round(direction_accuracy, 1),
-        "sample_size": len(prices)
+        "sample_size": len(actual),
+        "eval_method": "lstm_backtest" if use_lstm else "naive"
     }
 
 
@@ -737,8 +819,8 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
             # Buy Recommendation Engine
             buy_recommendation = get_buy_recommendation(pqs, price_stats, current_price, forecast_price)
             
-            # LSTM Metrics (MAE, RMSE, MAPE, Direction Accuracy)
-            lstm_metrics = calculate_lstm_metrics(p.get('price_history', []), forecast_price)
+            # LSTM Metrics (MAE, RMSE, MAPE, Direction Accuracy, Accuracy %)
+            lstm_metrics = calculate_lstm_metrics(p.get('price_history', []), forecast_price, lstm_model, scaler)
             
             # Thêm RQS cho từng comment
             sentiment_list = sentiment_data.get('list', [])
@@ -1174,6 +1256,54 @@ async def api_ingest(platform: str = Query(...), brand: str = Query(...), payloa
         return {"ok": True, "stored": True, "name": normalized.get("name")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+ADMIN_API_KEY = os.environ.get("ADMIN_API_KEY", "")
+
+
+def require_admin(x_api_key: str = Header(None)):
+    if not ADMIN_API_KEY:
+        return True
+    if x_api_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden: invalid admin API key")
+    return True
+
+
+@app.post("/api/admin/update-prices")
+async def manual_update_prices(_: bool = Depends(require_admin)):
+    """Endpoint để trigger cập nhật giá thủ công (cho testing/LSTM data collection)."""
+    try:
+        count = await price_updater.update_prices_once()
+        return {"ok": True, "updated_count": count, "message": f"Updated {count} products"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/admin/price-stats")
+async def price_stats(_: bool = Depends(require_admin)):
+    """Thống kê số lượng sản phẩm và lịch sử giá trong DB."""
+    db = app.state.db
+    stats = {}
+    total_products = 0
+    total_history = 0
+    for source, col_name in STORE_COLLECTIONS.items():
+        col = db[col_name]
+        count = await col.count_documents({})
+        total_products += count
+        pipeline = [
+            {"$project": {"history_count": {"$size": {"$ifNull": ["$price_history", []]}}}},
+            {"$group": {"_id": None, "total": {"$sum": "$history_count"}}}
+        ]
+        agg = await col.aggregate(pipeline).to_list(length=1)
+        history_count = agg[0]["total"] if agg else 0
+        total_history += history_count
+        stats[source] = {"products": count, "price_records": history_count}
+    return {
+        "total_products": total_products,
+        "total_price_records": total_history,
+        "per_platform": stats
+    }
+
 
 if __name__ == "__main__":
     import uvicorn

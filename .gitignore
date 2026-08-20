@@ -15,6 +15,7 @@ backend/phobert_models/
 backend/models/*.keras
 backend/models/*.pkl
 backend/models/*.h5
+backend/models/*.pth
 *.safetensors
 
 # MongoDB local data

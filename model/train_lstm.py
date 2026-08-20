@@ -8,20 +8,20 @@ Train LSTM tổng quát (1 model duy nhất) đọc trực tiếp MongoDB Atlas 
   hoangha, didongviet, clickbuy, mobilecity
 - Không giới hạn brand → user query tùy ý ở FE
 - Lọc sản phẩm có price_history >= 6 điểm (tối thiểu để tạo mẫu với LOOK_BACK=5)
-- Xuất model: backend/models/general_lstm_best.keras + general_scaler.pkl
+- Xuất model: backend/models/general_lstm_best.pth + general_scaler.pkl
 """
-import numpy as np
 import os
 import re
 import sys
 import joblib
 import warnings
 from datetime import datetime
+import numpy as np
 from pymongo import MongoClient
 from sklearn.preprocessing import MinMaxScaler
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.callbacks import ModelCheckpoint
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
 
 warnings.filterwarnings('ignore')
 
@@ -74,6 +74,32 @@ if not os.path.exists(MODEL_DIR):
     os.makedirs(MODEL_DIR)
 
 client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=15000)
+
+
+class PyTorchLSTM(nn.Module):
+    def __init__(self, input_size=1, hidden_1=64, hidden_2=32, output_size=1, dropout=0.2):
+        super().__init__()
+        self.lstm1 = nn.LSTM(input_size, hidden_1, batch_first=True)
+        self.dropout = nn.Dropout(dropout)
+        self.lstm2 = nn.LSTM(hidden_1, hidden_2, batch_first=True)
+        self.fc = nn.Linear(hidden_2, output_size)
+
+    def forward(self, x):
+        out, _ = self.lstm1(x)
+        out = self.dropout(out)
+        out, _ = self.lstm2(out)
+        out = self.fc(out[:, -1, :])
+        return out
+
+    def predict(self, x, verbose=0):
+        self.eval()
+        with torch.no_grad():
+            if isinstance(x, np.ndarray):
+                x_tensor = torch.tensor(x, dtype=torch.float32)
+            else:
+                x_tensor = x
+            out = self.forward(x_tensor)
+            return out.cpu().numpy()
 
 
 def load_and_clean_data():
@@ -129,17 +155,6 @@ def load_and_clean_data():
     return all_data
 
 
-def build_lstm_model():
-    model = Sequential([
-        LSTM(64, return_sequences=True, input_shape=(LOOK_BACK, 1)),
-        Dropout(0.2),
-        LSTM(32),
-        Dense(1)
-    ])
-    model.compile(optimizer='adam', loss='mse')
-    return model
-
-
 def train_general_model(all_data):
     """Train 1 model LSTM tổng quát trên tất cả sản phẩm (không phân biệt brand)."""
     print("\n🚀 Đang train Model LSTM TỔNG QUÁT (tất cả sản phẩm)...")
@@ -171,8 +186,8 @@ def train_general_model(all_data):
                 all_X_samples.append(scaled_prod[i:i + LOOK_BACK])
                 all_y_samples.append(scaled_prod[i + LOOK_BACK])
 
-    X = np.array(all_X_samples)
-    y = np.array(all_y_samples)
+    X = np.array(all_X_samples, dtype=np.float32)
+    y = np.array(all_y_samples, dtype=np.float32)
 
     if len(X) == 0:
         print("⚠️ Không tạo được mẫu train nào.")
@@ -181,26 +196,52 @@ def train_general_model(all_data):
     X = X.reshape(X.shape[0], X.shape[1], 1)
     print(f"📊 Tổng số mẫu train: {len(X)}")
 
-    # 3. Huấn luyện
-    model_path = os.path.join(MODEL_DIR, "general_lstm_best.keras")
+    # 3. Huấn luyện PyTorch Model
+    model_path = os.path.join(MODEL_DIR, "general_lstm_best.pth")
     scaler_path = os.path.join(MODEL_DIR, "general_scaler.pkl")
+
+    model = PyTorchLSTM()
 
     if os.path.exists(model_path):
         print("🔄 Cập nhật kiến thức cho Model tổng quát...")
-        model = load_model(model_path)
+        try:
+            model.load_state_dict(torch.load(model_path, map_location='cpu'))
+        except Exception as e:
+            print(f"⚠️ Không thể load model cũ, tạo model mới: {e}")
         epochs = 20
     else:
         print("🆕 Khởi tạo Model tổng quát mới...")
-        model = build_lstm_model()
         epochs = 60
 
-    checkpoint = ModelCheckpoint(
-        model_path, monitor='loss', save_best_only=True, verbose=1
-    )
-    model.fit(X, y, epochs=epochs, batch_size=32, verbose=1, callbacks=[checkpoint])
-    model.save(model_path)
+    dataset = TensorDataset(torch.tensor(X), torch.tensor(y).unsqueeze(1))
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.MSELoss()
+
+    best_loss = float('inf')
+    model.train()
+
+    for epoch in range(1, epochs + 1):
+        running_loss = 0.0
+        for batch_X, batch_y in dataloader:
+            optimizer.zero_grad()
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item() * batch_X.size(0)
+
+        epoch_loss = running_loss / len(X)
+        if epoch % 5 == 0 or epoch == epochs:
+            print(f"Epoch {epoch}/{epochs} - loss: {epoch_loss:.6f}")
+
+        if epoch_loss < best_loss:
+            best_loss = epoch_loss
+            torch.save(model.state_dict(), model_path)
+
     joblib.dump(scaler, scaler_path)
-    print(f"✅ Đã lưu Model và Scaler: {model_path}")
+    print(f"✅ Đã lưu Model ({model_path}) và Scaler ({scaler_path}) (Best Loss: {best_loss:.6f})")
 
 
 if __name__ == "__main__":
