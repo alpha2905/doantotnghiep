@@ -119,7 +119,7 @@ def main():
 
     if args.once:
         count = asyncio.run(run_once(dry_run=args.dry_run, limit=args.limit))
-        print(f"\n✅ Hoàn tất. Đã cập nhật {count} sản phẩm.")
+        print(f"\nHoan tat. Da cap nhat {count} san pham.")
     else:
         asyncio.run(loop(interval_hours=args.interval, dry_run=args.dry_run, limit=args.limit))
 

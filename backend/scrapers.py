@@ -111,36 +111,31 @@ def fetch_with_curl_cffi(url: str, timeout: int = 20) -> Optional[str]:
 
 
 async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15, max_retries: int = 3) -> Optional[str]:
-    """Fetch a page with realistic browser headers and retry with exponential backoff.
+    """Fetch a page with realistic browser headers.
 
-    Strategy:
-      1) aiohttp direct with retries
+    Strategy (optimized for local runs):
+      1) aiohttp direct (1 attempt, fast)
       2) curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
       3) r.jina.ai free reader proxy (bypasses IP blocks)
     """
-    # 1) Direct attempt with retries
-    for attempt in range(max_retries):
-        try:
-            headers = get_headers(referer=f"https://{url.split('/')[2]}/")
-            async with session.get(
-                url,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-                allow_redirects=True,
-            ) as resp:
-                if resp.status == 200:
-                    return await resp.text()
-                elif resp.status in (403, 429):
-                    wait = 2 ** attempt + random.uniform(0.5, 1.5)
-                    logger.warning(f"[Scraper] HTTP {resp.status} for {url} (attempt {attempt + 1}/{max_retries}), retrying in {wait:.1f}s")
-                    await asyncio.sleep(wait)
-                else:
-                    logger.warning(f"[Scraper] HTTP {resp.status} for {url}")
-                    return None
-        except Exception as e:
-            logger.error(f"[Scraper] Fetch error for {url}: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2 ** attempt)
+    # 1) Direct attempt (single, fast)
+    try:
+        headers = get_headers(referer=f"https://{url.split('/')[2]}/")
+        async with session.get(
+            url,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+            allow_redirects=True,
+        ) as resp:
+            if resp.status == 200:
+                return await resp.text()
+            elif resp.status in (403, 429):
+                logger.warning(f"[Scraper] HTTP {resp.status} for {url}, trying curl_cffi...")
+            else:
+                logger.warning(f"[Scraper] HTTP {resp.status} for {url}")
+                return None
+    except Exception as e:
+        logger.error(f"[Scraper] Fetch error for {url}: {e}")
 
     # 2) Try curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
     logger.warning(f"[Scraper] Direct fetch failed for {url}, trying curl_cffi (Chrome impersonation)...")
