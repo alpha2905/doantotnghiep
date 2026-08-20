@@ -9,6 +9,13 @@ from typing import Optional, Dict, Any, List
 import aiohttp
 from bs4 import BeautifulSoup
 
+try:
+    from curl_cffi import requests as curl_requests
+    CURL_AVAILABLE = True
+except ImportError:
+    CURL_AVAILABLE = False
+    curl_requests = None
+
 logger = logging.getLogger(__name__)
 
 USER_AGENTS = [
@@ -71,11 +78,45 @@ def clean_price_text(text: str) -> int:
         return 0
 
 
+def fetch_with_curl_cffi(url: str, timeout: int = 20) -> Optional[str]:
+    """Fetch a page using curl_cffi with Chrome TLS impersonation.
+
+    This bypasses TLS fingerprinting blocks (e.g. FPT Shop blocking aiohttp/python requests).
+    """
+    if not CURL_AVAILABLE:
+        logger.warning("[Scraper] curl_cffi not installed, skipping TLS impersonation fetch")
+        return None
+
+    try:
+        headers = get_headers(referer=f"https://{url.split('/')[2]}/")
+        resp = curl_requests.get(
+            url,
+            headers=headers,
+            impersonate="chrome",
+            timeout=timeout,
+            allow_redirects=True,
+        )
+        if resp.status_code == 200:
+            text = resp.text
+            if text and len(text) > 500:
+                logger.info(f"[Scraper] curl_cffi (Chrome impersonation) fetch succeeded for {url}")
+                return text
+            logger.warning(f"[Scraper] curl_cffi returned empty/short content for {url}")
+        else:
+            logger.warning(f"[Scraper] curl_cffi HTTP {resp.status_code} for {url}")
+    except Exception as e:
+        logger.error(f"[Scraper] curl_cffi fetch error for {url}: {e}")
+
+    return None
+
+
 async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15, max_retries: int = 3) -> Optional[str]:
     """Fetch a page with realistic browser headers and retry with exponential backoff.
 
-    If direct access is blocked (403/429), falls back to the free r.jina.ai
-    reader proxy which fetches the page from their servers.
+    Strategy:
+      1) aiohttp direct with retries
+      2) curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
+      3) r.jina.ai free reader proxy (bypasses IP blocks)
     """
     # 1) Direct attempt with retries
     for attempt in range(max_retries):
@@ -101,8 +142,14 @@ async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 ** attempt)
 
-    # 2) Fallback: fetch via r.jina.ai free reader proxy (bypasses IP blocks)
-    logger.warning(f"[Scraper] Direct fetch failed for {url}, trying r.jina.ai proxy...")
+    # 2) Try curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
+    logger.warning(f"[Scraper] Direct fetch failed for {url}, trying curl_cffi (Chrome impersonation)...")
+    html = await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
+    if html:
+        return html
+
+    # 3) Fallback: fetch via r.jina.ai free reader proxy (bypasses IP blocks)
+    logger.warning(f"[Scraper] curl_cffi failed for {url}, trying r.jina.ai proxy...")
     proxy_url = f"https://r.jina.ai/{url}"
     try:
         proxy_headers = {

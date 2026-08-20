@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           cd backend
-          pip install motor pymongo python-dotenv aiohttp beautifulsoup4
+          pip install motor pymongo python-dotenv aiohttp beautifulsoup4 curl_cffi
 
       - name: Run price updater
         env:
