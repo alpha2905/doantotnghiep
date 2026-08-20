@@ -3,6 +3,7 @@ import re
 import json
 import asyncio
 import random
+import time
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
@@ -83,34 +84,49 @@ def clean_price_text(text: str) -> int:
         return 0
 
 
-def fetch_with_curl_cffi(url: str, timeout: int = 20) -> Optional[str]:
+def fetch_with_curl_cffi(url: str, timeout: int = 20, max_retries: int = 3) -> Optional[str]:
     """Fetch a page using curl_cffi with Chrome TLS impersonation.
 
     This bypasses TLS fingerprinting blocks (e.g. FPT Shop blocking aiohttp/python requests).
+    Retries with backoff on HTTP 503 (rate limiting).
     """
     if not CURL_AVAILABLE:
         logger.warning("[Scraper] curl_cffi not installed, skipping TLS impersonation fetch")
         return None
 
-    try:
-        headers = get_headers(referer=f"https://{url.split('/')[2]}/")
-        resp = curl_requests.get(
-            url,
-            headers=headers,
-            impersonate="chrome",
-            timeout=timeout,
-            allow_redirects=True,
-        )
-        if resp.status_code == 200:
-            text = resp.text
-            if text and len(text) > 500:
-                logger.info(f"[Scraper] curl_cffi (Chrome impersonation) fetch succeeded for {url}")
-                return text
-            logger.warning(f"[Scraper] curl_cffi returned empty/short content for {url}")
-        else:
-            logger.warning(f"[Scraper] curl_cffi HTTP {resp.status_code} for {url}")
-    except Exception as e:
-        logger.error(f"[Scraper] curl_cffi fetch error for {url}: {e}")
+    for attempt in range(1, max_retries + 1):
+        try:
+            headers = get_headers(referer=f"https://{url.split('/')[2]}/")
+            resp = curl_requests.get(
+                url,
+                headers=headers,
+                impersonate="chrome",
+                timeout=timeout,
+                allow_redirects=True,
+            )
+            if resp.status_code == 200:
+                text = resp.text
+                if text and len(text) > 500:
+                    logger.info(f"[Scraper] curl_cffi (Chrome impersonation) fetch succeeded for {url}")
+                    return text
+                logger.warning(f"[Scraper] curl_cffi returned empty/short content for {url}")
+            elif resp.status_code == 503 and attempt < max_retries:
+                # Rate limited -> wait and retry with backoff
+                wait = 2 ** attempt + random.uniform(0.5, 1.5)
+                logger.warning(
+                    f"[Scraper] curl_cffi HTTP 503 for {url} (attempt {attempt}/{max_retries}), "
+                    f"retrying in {wait:.1f}s..."
+                )
+                time.sleep(wait)
+                continue
+            else:
+                logger.warning(f"[Scraper] curl_cffi HTTP {resp.status_code} for {url}")
+        except Exception as e:
+            logger.error(f"[Scraper] curl_cffi fetch error for {url}: {e}")
+            if attempt < max_retries:
+                await_sleep = 2 ** attempt
+                logger.warning(f"[Scraper] Retrying in {await_sleep}s...")
+                time.sleep(await_sleep)
 
     return None
 
@@ -350,10 +366,23 @@ async def update_prices_real(db, product_limit: int = 0, concurrency: int = 4):
                 cursor = cursor.limit(product_limit)
             products = await cursor.to_list(length=product_limit if product_limit and product_limit > 0 else None)
 
-            sem = asyncio.Semaphore(concurrency)
             prefer_curl = source in BLOCKED_PLATFORMS
 
-            async def process_one(product, _col=col, _source=source, _prefer_curl=prefer_curl):
+            # Platforms that rate-limit aggressively (e.g. FPT Shop) -> serialize + delay
+            if source in BLOCKED_PLATFORMS:
+                sem = asyncio.Semaphore(1)
+                request_delay = (1.5, 2.5)
+            else:
+                sem = asyncio.Semaphore(concurrency)
+                request_delay = (0.3, 0.8)
+
+            async def process_one(
+                product,
+                _col=col,
+                _source=source,
+                _prefer_curl=prefer_curl,
+                _delay=request_delay,
+            ):
                 product_url = product.get("product_url") or product.get("link") or product.get("url") or ""
                 if not product_url or product_url == "#":
                     return 0
@@ -362,13 +391,13 @@ async def update_prices_real(db, product_limit: int = 0, concurrency: int = 4):
                     price_data = await scrape_platform_price(
                         session, _source, product_url, prefer_curl=_prefer_curl
                     )
+                    # Delay between requests to avoid rate limiting (inside semaphore
+                    # so it serializes correctly for rate-limited platforms)
+                    await asyncio.sleep(random.uniform(*_delay))
 
                 if price_data:
                     await update_product_real_price(_col, product, price_data)
                     return 1
-
-                # Small delay between failed requests to avoid rate limiting
-                await asyncio.sleep(random.uniform(0.5, 1.5))
                 return 0
 
             results = await asyncio.gather(
