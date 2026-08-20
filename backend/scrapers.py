@@ -72,7 +72,12 @@ def clean_price_text(text: str) -> int:
 
 
 async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15, max_retries: int = 3) -> Optional[str]:
-    """Fetch a page with realistic browser headers and retry with exponential backoff."""
+    """Fetch a page with realistic browser headers and retry with exponential backoff.
+
+    If direct access is blocked (403/429), falls back to the free r.jina.ai
+    reader proxy which fetches the page from their servers.
+    """
+    # 1) Direct attempt with retries
     for attempt in range(max_retries):
         try:
             headers = get_headers(referer=f"https://{url.split('/')[2]}/")
@@ -95,7 +100,34 @@ async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15
             logger.error(f"[Scraper] Fetch error for {url}: {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(2 ** attempt)
-    logger.error(f"[Scraper] Failed to fetch {url} after {max_retries} attempts")
+
+    # 2) Fallback: fetch via r.jina.ai free reader proxy (bypasses IP blocks)
+    logger.warning(f"[Scraper] Direct fetch failed for {url}, trying r.jina.ai proxy...")
+    proxy_url = f"https://r.jina.ai/{url}"
+    try:
+        proxy_headers = {
+            "User-Agent": random.choice(USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "X-Return-Format": "html",
+        }
+        async with session.get(
+            proxy_url,
+            headers=proxy_headers,
+            timeout=aiohttp.ClientTimeout(total=timeout + 10),
+            allow_redirects=True,
+        ) as resp:
+            if resp.status == 200:
+                text = await resp.text()
+                if text and len(text) > 500:
+                    logger.info(f"[Scraper] Proxy fetch succeeded for {url}")
+                    return text
+                logger.warning(f"[Scraper] Proxy returned empty/short content for {url}")
+            else:
+                logger.warning(f"[Scraper] Proxy HTTP {resp.status} for {url}")
+    except Exception as e:
+        logger.error(f"[Scraper] Proxy fetch error for {url}: {e}")
+
+    logger.error(f"[Scraper] Failed to fetch {url} after all attempts")
     return None
 
 
@@ -150,6 +182,32 @@ def extract_price_from_text(soup: BeautifulSoup) -> Optional[int]:
     return None
 
 
+def extract_price_from_plain_text(raw_text: str) -> Optional[int]:
+    """Extract price from plain text / markdown (e.g. r.jina.ai proxy output)."""
+    if not raw_text:
+        return None
+
+    # Look for price patterns like "12.990.000₫", "12,990,000 VND", "12.990.000 đ"
+    patterns = [
+        r"(\d{1,3}(?:[.,]\d{3})+)\s*(?:₫|đ|VND|vnđ|đồng)",
+        r"(?:₫|đ|VND|vnđ|đồng)\s*(\d{1,3}(?:[.,]\d{3})+)",
+        r"(\d{1,3}(?:[.,]\d{3})+)\s*₫",
+    ]
+    for pat in patterns:
+        for m in re.finditer(pat, raw_text, re.IGNORECASE):
+            price = clean_price_text(m.group(1))
+            if 10000 <= price <= 500000000:
+                return price
+
+    # Fallback: any large number near "giá" / "price"
+    for m in re.finditer(r"(?:giá|price|Giá bán|Giá):?\s*(\d{1,3}(?:[.,]\d{3})+)", raw_text, re.IGNORECASE):
+        price = clean_price_text(m.group(1))
+        if 10000 <= price <= 500000000:
+            return price
+
+    return None
+
+
 async def scrape_platform_price(session: aiohttp.ClientSession, platform: str, product_url: str) -> Optional[Dict[str, Any]]:
     domain = PLATFORM_DOMAINS.get(platform)
     if not domain or not product_url or product_url == "#":
@@ -165,6 +223,7 @@ async def scrape_platform_price(session: aiohttp.ClientSession, platform: str, p
         extract_price_from_json_ld(soup)
         or extract_price_from_meta(soup)
         or extract_price_from_text(soup)
+        or extract_price_from_plain_text(html)
     )
 
     if not price:
