@@ -69,17 +69,26 @@ async def run_once(dry_run: bool = False, limit: int = 0):
                 if limit and limit > 0:
                     cursor = cursor.limit(limit)
                 products = await cursor.to_list(length=limit if limit and limit > 0 else None)
-                updated = 0
-                for p in products:
-                    product_url = p.get("product_url") or p.get("link") or p.get("url") or ""
+                prefer_curl = source in scrapers.BLOCKED_PLATFORMS
+                sem = asyncio.Semaphore(4)
+
+                async def fallback_one(product, _col=col, _source=source, _prefer_curl=prefer_curl):
+                    product_url = product.get("product_url") or product.get("link") or product.get("url") or ""
                     if not product_url or product_url == "#":
-                        continue
-                    price_data = await scrapers.scrape_platform_price(session, source, product_url)
+                        return 0
+                    async with sem:
+                        price_data = await scrapers.scrape_platform_price(
+                            session, _source, product_url, prefer_curl=_prefer_curl
+                        )
                     if price_data:
                         if not dry_run:
-                            await scrapers.update_product_real_price(col, p, price_data)
-                        updated += 1
-                    await asyncio.sleep(1.0)
+                            await scrapers.update_product_real_price(_col, product, price_data)
+                        return 1
+                    await asyncio.sleep(0.5)
+                    return 0
+
+                results = await asyncio.gather(*(fallback_one(p) for p in products))
+                updated = sum(results)
                 total_updated += updated
                 logger.info(f"[LocalScraper] {source}: cập nhật {updated}/{len(products)} sản phẩm")
             except Exception as e:

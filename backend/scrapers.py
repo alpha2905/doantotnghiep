@@ -65,6 +65,11 @@ PLATFORM_DOMAINS = {
     "MobileCity": "mobilecity.vn",
 }
 
+# Platforms known to block aiohttp (TLS fingerprint) -> use curl_cffi FIRST
+BLOCKED_PLATFORMS = {
+    "FPT Shop",
+}
+
 
 def clean_price_text(text: str) -> int:
     if not text:
@@ -110,14 +115,29 @@ def fetch_with_curl_cffi(url: str, timeout: int = 20) -> Optional[str]:
     return None
 
 
-async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15, max_retries: int = 3) -> Optional[str]:
+async def fetch_page(
+    session: aiohttp.ClientSession,
+    url: str,
+    timeout: int = 8,
+    max_retries: int = 3,
+    prefer_curl: bool = False,
+) -> Optional[str]:
     """Fetch a page with realistic browser headers.
 
     Strategy (optimized for local runs):
+      0) If prefer_curl: try curl_cffi FIRST (bypasses TLS fingerprint blocks, e.g. FPT Shop)
       1) aiohttp direct (1 attempt, fast)
       2) curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
       3) r.jina.ai free reader proxy (bypasses IP blocks)
     """
+    # 0) Prefer curl_cffi for platforms known to block aiohttp (e.g. FPT Shop)
+    if prefer_curl:
+        logger.info(f"[Scraper] prefer_curl=True, trying curl_cffi first for {url}")
+        html = await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
+        if html:
+            return html
+        logger.warning(f"[Scraper] curl_cffi failed for {url}, falling back to aiohttp...")
+
     # 1) Direct attempt (single, fast)
     try:
         headers = get_headers(referer=f"https://{url.split('/')[2]}/")
@@ -138,10 +158,11 @@ async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15
         logger.error(f"[Scraper] Fetch error for {url}: {e}")
 
     # 2) Try curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
-    logger.warning(f"[Scraper] Direct fetch failed for {url}, trying curl_cffi (Chrome impersonation)...")
-    html = await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
-    if html:
-        return html
+    if not prefer_curl:
+        logger.warning(f"[Scraper] Direct fetch failed for {url}, trying curl_cffi (Chrome impersonation)...")
+        html = await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
+        if html:
+            return html
 
     # 3) Fallback: fetch via r.jina.ai free reader proxy (bypasses IP blocks)
     logger.warning(f"[Scraper] curl_cffi failed for {url}, trying r.jina.ai proxy...")
@@ -250,12 +271,17 @@ def extract_price_from_plain_text(raw_text: str) -> Optional[int]:
     return None
 
 
-async def scrape_platform_price(session: aiohttp.ClientSession, platform: str, product_url: str) -> Optional[Dict[str, Any]]:
+async def scrape_platform_price(
+    session: aiohttp.ClientSession,
+    platform: str,
+    product_url: str,
+    prefer_curl: bool = False,
+) -> Optional[Dict[str, Any]]:
     domain = PLATFORM_DOMAINS.get(platform)
     if not domain or not product_url or product_url == "#":
         return None
 
-    html = await fetch_page(session, product_url)
+    html = await fetch_page(session, product_url, prefer_curl=prefer_curl)
     if not html:
         return None
 
@@ -306,10 +332,11 @@ async def update_product_real_price(db, product: Dict[str, Any], price_data: Dic
     return True
 
 
-async def update_prices_real(db, product_limit: int = 0):
+async def update_prices_real(db, product_limit: int = 0, concurrency: int = 4):
     """Update real prices for all products (or up to product_limit if > 0).
 
     product_limit <= 0 means ALL products in the collection.
+    concurrency controls how many products are scraped in parallel per platform.
     """
     now = datetime.now(timezone.utc)
     updated_count = 0
@@ -323,21 +350,37 @@ async def update_prices_real(db, product_limit: int = 0):
                 cursor = cursor.limit(product_limit)
             products = await cursor.to_list(length=product_limit if product_limit and product_limit > 0 else None)
 
-            for p in products:
-                product_url = p.get("product_url") or p.get("link") or p.get("url") or ""
+            sem = asyncio.Semaphore(concurrency)
+            prefer_curl = source in BLOCKED_PLATFORMS
+
+            async def process_one(product, _col=col, _source=source, _prefer_curl=prefer_curl):
+                product_url = product.get("product_url") or product.get("link") or product.get("url") or ""
                 if not product_url or product_url == "#":
-                    failed_count += 1
-                    continue
+                    return 0
 
-                price_data = await scrape_platform_price(session, source, product_url)
+                async with sem:
+                    price_data = await scrape_platform_price(
+                        session, _source, product_url, prefer_curl=_prefer_curl
+                    )
+
                 if price_data:
-                    await update_product_real_price(col, p, price_data)
-                    updated_count += 1
-                else:
-                    failed_count += 1
+                    await update_product_real_price(_col, product, price_data)
+                    return 1
 
-                # Random delay between requests to avoid rate limiting / 403 blocks
-                await asyncio.sleep(random.uniform(1.0, 3.0))
+                # Small delay between failed requests to avoid rate limiting
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+                return 0
+
+            results = await asyncio.gather(
+                *(process_one(p) for p in products),
+                return_exceptions=True,
+            )
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.error(f"[Scraper] Unexpected error on {source}: {r}")
+                    failed_count += 1
+                else:
+                    updated_count += r
 
     logger.info(
         f"[Scraper] Done at {now.isoformat()}. "
