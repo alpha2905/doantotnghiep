@@ -2,19 +2,50 @@ import os
 import re
 import json
 import asyncio
+import random
 import logging
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import aiohttp
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+]
+
+USER_AGENT = random.choice(USER_AGENTS)
+
+
+def get_headers(referer: str = None) -> Dict[str, str]:
+    """Build realistic browser headers to avoid 403 blocks."""
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Cache-Control": "max-age=0",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
 
 PLATFORM_DOMAINS = {
     "FPT Shop": "fptshop.com.vn",
@@ -40,21 +71,32 @@ def clean_price_text(text: str) -> int:
         return 0
 
 
-async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15) -> Optional[str]:
-    try:
-        async with session.get(
-            url,
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "vi-VN,vi;q=0.9,en;q=0.8"},
-            timeout=aiohttp.ClientTimeout(total=timeout),
-            allow_redirects=True,
-        ) as resp:
-            if resp.status == 200:
-                return await resp.text()
-            logger.warning(f"[Scraper] HTTP {resp.status} for {url}")
-            return None
-    except Exception as e:
-        logger.error(f"[Scraper] Fetch error for {url}: {e}")
-        return None
+async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15, max_retries: int = 3) -> Optional[str]:
+    """Fetch a page with realistic browser headers and retry with exponential backoff."""
+    for attempt in range(max_retries):
+        try:
+            headers = get_headers(referer=f"https://{url.split('/')[2]}/")
+            async with session.get(
+                url,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=timeout),
+                allow_redirects=True,
+            ) as resp:
+                if resp.status == 200:
+                    return await resp.text()
+                elif resp.status in (403, 429):
+                    wait = 2 ** attempt + random.uniform(0.5, 1.5)
+                    logger.warning(f"[Scraper] HTTP {resp.status} for {url} (attempt {attempt + 1}/{max_retries}), retrying in {wait:.1f}s")
+                    await asyncio.sleep(wait)
+                else:
+                    logger.warning(f"[Scraper] HTTP {resp.status} for {url}")
+                    return None
+        except Exception as e:
+            logger.error(f"[Scraper] Fetch error for {url}: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+    logger.error(f"[Scraper] Failed to fetch {url} after {max_retries} attempts")
+    return None
 
 
 def extract_price_from_json_ld(soup: BeautifulSoup) -> Optional[int]:
@@ -186,6 +228,9 @@ async def update_prices_real(db, product_limit: int = 200):
                     updated_count += 1
                 else:
                     failed_count += 1
+
+                # Random delay between requests to avoid rate limiting / 403 blocks
+                await asyncio.sleep(random.uniform(1.0, 3.0))
 
     logger.info(
         f"[Scraper] Done at {now.isoformat()}. "
