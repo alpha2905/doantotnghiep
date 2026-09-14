@@ -6,14 +6,17 @@ if hasattr(sys.stdout, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
 import numpy as np
 import torch
-import keras
+try:
+    import keras
+except Exception:
+    keras = None
 import joblib
 import asyncio
 import random
 import re
 from datetime import datetime, timedelta, timezone
 from collections import Counter
-from fastapi import FastAPI, HTTPException, Query, Depends, Body
+from fastapi import FastAPI, HTTPException, Query, Depends, Body, Header
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from transformers import AutoTokenizer, RobertaForSequenceClassification
@@ -25,7 +28,7 @@ import auth
 import firebase_helper
 import price_updater
 
-# --- CẤU HÌNH ---
+# --- CẤU HÌNH (ưu tiên biến môi trường khi deploy) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BRANDS = ["iphone", "samsung", "oppo", "xiaomi"]
 LOOK_BACK = 5
@@ -115,7 +118,7 @@ async def lifespan(app: FastAPI):
             print(f"✅ PyTorch LSTM Model loaded: {pth_path}")
         except Exception as e:
             print(f"⚠️ Không thể nạp PyTorch LSTM: {e}")
-    elif os.path.exists(keras_path):
+    elif os.path.exists(keras_path) and keras is not None:
         try:
             lstm_model = keras.models.load_model(keras_path)
             print(f"✅ Keras LSTM Model loaded: {keras_path}")
@@ -128,8 +131,8 @@ async def lifespan(app: FastAPI):
     
     # Load PhoBERT Models cho NLP
     try:
-        sent_path = os.path.join(BASE_DIR, "phobert_models", "sentiment_classification", "final_model")
-        asp_path = os.path.join(BASE_DIR, "phobert_models", "aspect_classification", "final_model")
+        sent_path = os.path.join(BASE_DIR, "model", "phobert_models", "sentiment_classification", "final_model")
+        asp_path = os.path.join(BASE_DIR, "model", "phobert_models", "aspect_classification", "final_model")
         
         # Đảm bảo path tồn tại
         if not os.path.exists(sent_path):
@@ -171,13 +174,42 @@ async def lifespan(app: FastAPI):
     firebase_helper.init_firebase()
 
     # Khởi chạy background task cập nhật giá mỗi 3 giờ để phục vụ training LSTM
-    background_price_task = asyncio.create_task(price_updater.price_updater_loop(interval_hours=3))
-    print("⏰ Background price updater started: will update all products every 3 hours")
+    # TẠM TẮT: chỉ chạy khi cần scrape data mới
+    # background_price_task = asyncio.create_task(price_updater.price_updater_loop(interval_hours=3))
+    # print("⏰ Background price updater started: will update all products every 3 hours")
+    print("ℹ️ Background price updater DISABLED (run scrapers.py manually when needed)")
+    
+    # Khởi chạy background task phân tích bình luận theo chu kỳ
+    # TẠM TẮT: chạy khi cần phân tích lại toàn bộ sản phẩm
+    # from background_workers import CommentAnalysisWorker
+    # worker = CommentAnalysisWorker(MONGO_URI, MONGO_DB)
+    # await worker.connect()
+    # background_comment_task = asyncio.create_task(worker.analyze_all_platforms(list(STORE_COLLECTIONS.keys())))
+    # print("⏰ Background comment analyzer started")
 
     yield
 
 app = FastAPI(lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# CORS: local cho phép tất cả; production giới hạn theo FRONTEND_ORIGINS
+# (vd: FRONTEND_ORIGINS=https://datn-2905.web.app,https://datn-2905.firebaseapp.com)
+def _cors_origins() -> list:
+    raw = os.environ.get("FRONTEND_ORIGINS", "*").strip()
+    if not raw or raw == "*":
+        return ["*"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins(),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Cache kết quả so sánh để trả về nhanh (TTL 10 phút)
+compare_cache = {}
+COMPARE_CACHE_TTL = 600  # giây
+import time as _time
 
 # Kết nối MongoDB
 MONGO_URI = os.environ.get(
@@ -208,8 +240,13 @@ def analyze_comments_ai(comments):
     if not comments: 
         return {"pos": 0, "neu": 100, "neg": 0, "list": []}
     
-    # Lấy mẫu phân tích (tối đa 10-15 câu để đảm bảo tốc độ API)
-    sample = random.sample(comments, min(len(comments), 12))
+    # Xử lý tất cả bình luận một cách nhất quán (deterministic), không dùng random.sample
+    # Giới hạn 50 câu bình luận sạch đầu tiên để bảo đảm nhất quán PQS/Sentiment và tốc độ API
+    comments_clean = [str(c).strip() for c in comments if isinstance(c, (str, dict)) and str(c).strip()]
+    if not comments_clean:
+        return {"pos": 0, "neu": 100, "neg": 0, "list": []}
+
+    sample = comments_clean[:50]
     results = []
     stats = {"POSITIVE": 0, "NEUTRAL": 0, "NEGATIVE": 0}
     
@@ -358,10 +395,14 @@ def analyze_comments_ai(comments):
     pos_count = stats["POSITIVE"]
     neg_count = stats["NEGATIVE"]
     neu_count = stats["NEUTRAL"]
+    if total == 0:
+        return {"pos": 0, "neu": 100, "neg": 0, "pos_count": 0, "total": 0, "list": []}
     return {
         "pos": round((pos_count / total) * 100),
         "neu": round((neu_count / total) * 100),
         "neg": round((neg_count / total) * 100),
+        "pos_count": pos_count,
+        "total": total,
         "list": results
     }
 
@@ -369,43 +410,57 @@ def analyze_comments_ai(comments):
 # CÁC HÀM TÍNH TOÁN NÂNG CAO (THEO GÓP Ý GIẢNG VIÊN)
 # ============================================================
 
-def calculate_pqs(product, sentiment_stats):
+def calculate_pqs(product, sentiment_stats, current_price=None, forecast_price=None, min_market_price=None, max_market_price=None):
     """
     PQS = Product Quality Score (Thang điểm 100)
-    Thành phần:
-    - Rating trung bình: 25%
-    - Sentiment Score: 30%
-    - Uy tín gian hàng: 15%
-    - Số lượng bán: 15%
-    - Tỷ lệ phản hồi tích cực: 15%
+    Công thức theo đề tài:
+    PQS = (S_Rating × 0.25) + (S_Sentiment × 0.30) + (S_ShopRep × 0.15) + (S_PosRate × 0.15) + (S_Sold × 0.15)
+    
+    Trọng số được heuristic từ prototype, chưa được tối ưu hóa bằng khảo sát.
+    Chi tiết xem backend/config/pqs_weights.yaml
     """
-    # Rating: 0-5 -> quy đổi 0-100
+    # 1. S_Rating: Điểm đánh giá sao (0-100)
     rating = product.get('rating', 0) or 0
     try:
-        rating_score = (float(rating) / 5) * 100 if rating else 50
+        s_rating = (float(rating) / 5.0) * 100 if rating else 50
     except:
-        rating_score = 50
+        s_rating = 50
     
-    # Sentiment Score: % tích cực
-    sentiment_score = sentiment_stats.get('pos', 0) or 0
+    # 2. S_Sentiment: Tỷ lệ bình luận tích cực (0-100)
+    s_sentiment = sentiment_stats.get('pos', 0) or 0
     
-    # Uy tín gian hàng (mặc định 70 nếu không có dữ liệu)
-    shop_reputation = product.get('shop_reputation', 70) or 70
+    # 3. S_ShopRep: Uy tín cửa hàng (0-100) - heuristic
+    # Cửa hàng lớn có chính sách đổi trả tốt
+    platform = product.get('platform', '')
+    shop_reputation_map = {
+        'Thế Giới Di Động': 90, 'FPT Shop': 85, 'CellphoneS': 85,
+        'Hoàng Hà Mobile': 75, 'Viettel Store': 80, 'Clickbuy': 75, 'MobileCity': 70
+    }
+    s_shop_rep = shop_reputation_map.get(platform, 70)
     
-    # Số lượng bán: normalize (giả định 1000+ = 100 điểm)
-    sold = product.get('sold', 0) or 0
-    try:
-        sold_score = min(100, (float(sold) / 1000) * 100) if sold else 50
-    except:
-        sold_score = 50
+    # 4. S_PosRate: Tỷ lệ bình luận tích cực (0-100)
+    total_comments = sentiment_stats.get('total', 0) or 0
+    pos_count = sentiment_stats.get('pos_count', 0) or 0
+    s_pos_rate = (pos_count / total_comments * 100) if total_comments > 0 else s_sentiment
     
-    # Tỷ lệ phản hồi tích cực
-    positive_rate = sentiment_stats.get('pos', 0) or 0
+    # 5. S_Sold: Số lượng đã bán (0-100) - normalize log scale
+    sold_volume = product.get('sold_volume', 0) or 0
+    if sold_volume > 0:
+        import math
+        s_sold = min(100, math.log10(sold_volume + 1) * 20)  # log scale: 10->20, 100->40, 1000->60, 10000->80, 100000->100
+    else:
+        s_sold = 50  # mặc định nếu không có dữ liệu
     
-    pqs = (rating_score * 0.25 + sentiment_score * 0.30 +
-           shop_reputation * 0.15 + sold_score * 0.15 +
-           positive_rate * 0.15)
-    return round(pqs)
+    # Trọng số theo tài liệu đề tài
+    W_RATING = 0.25
+    W_SENTIMENT = 0.30
+    W_SHOP_REP = 0.15
+    W_POS_RATE = 0.15
+    W_SOLD = 0.15
+    
+    pqs = (s_rating * W_RATING) + (s_sentiment * W_SENTIMENT) + \
+          (s_shop_rep * W_SHOP_REP) + (s_pos_rate * W_POS_RATE) + (s_sold * W_SOLD)
+    return round(min(100, max(0, pqs)))
 
 
 def get_pqs_label(pqs):
@@ -588,7 +643,9 @@ def calculate_lstm_metrics(price_history, forecast_price, lstm_model=None, scale
         "accuracy": round(accuracy, 1),
         "direction_accuracy": round(direction_accuracy, 1),
         "sample_size": len(actual),
-        "eval_method": "lstm_backtest" if use_lstm else "naive"
+        "eval_method": "lstm_backtest" if use_lstm else "naive",
+        "evaluation_context": "historical_test_set_evaluation",
+        "note": "Các chỉ số (MAE, RMSE, MAPE) là kết quả đánh giá thực nghiệm trên dữ liệu kiểm thử lịch sử (Historical Evaluation)."
     }
 
 
@@ -626,6 +683,17 @@ def calculate_rqs(comment_text, sentiment_label):
     
     rqs = min(5.0, sent_score + length_score)
     return round(rqs, 1)
+
+# Health check cho nền tảng deploy (Render/Railway) + kiểm tra nhanh local.
+@app.get("/health")
+async def health():
+    try:
+        await db.command("ping")
+        mongo = "ok"
+    except Exception as e:
+        mongo = f"error: {e}"
+    return {"status": "ok", "mongo": mongo}
+
 
 @app.get("/api/search")
 async def search_products(brand: str = "iphone", name: str = Query(...)):
@@ -679,8 +747,61 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
     }
 
 
+@app.get("/api/suggest")
+async def suggest_products(name: str = Query(...), limit: int = Query(8)):
+    """
+    Gợi ý sản phẩm theo query (autocomplete):
+    Tìm kiếm tên sản phẩm khớp query trên 8 sàn, trả về danh sách gợi ý.
+    """
+    search_name = clean_product_name(name)
+    if not search_name:
+        return {"suggestions": []}
+
+    async def get_suggestions(collection_name, platform):
+        col = db[collection_name]
+        try:
+            cursor = col.find(
+                {"name": {"$regex": search_name.replace(" ", ".*"), "$options": "i"}}
+            ).limit(limit)
+            items = await cursor.to_list(length=limit)
+            return [{
+                "name": item.get('name', ''),
+                "platform": platform,
+                "price": parse_price(item.get('price_number') or item.get('price', '')),
+                "image": item.get('image_url', '') or item.get('image', ''),
+                "link": item.get('product_url', '#') or item.get('url', '#')
+            } for item in items]
+        except Exception:
+            return []
+
+    results = await asyncio.gather(
+        *(get_suggestions(c, p) for p, c in STORE_COLLECTIONS.items())
+    )
+    suggestions = [s for sublist in results for s in sublist]
+
+    # Loại bỏ trùng (name, platform), giới hạn kết quả
+    seen = set()
+    unique = []
+    for s in suggestions:
+        key = (s['name'].lower(), s['platform'].lower())
+        if key not in seen:
+            seen.add(key)
+            unique.append(s)
+        if len(unique) >= limit:
+            break
+
+    return {"suggestions": unique}
+
+
 @app.get("/api/compare")
 async def get_comparison(brand: str = "iphone", name: str = Query(...)):
+    # Kiểm tra cache trước (trả về ngay lập tức nếu đã có)
+    cache_key = f"{brand}:{name.strip().lower()}"
+    now = _time.time()
+    cached = compare_cache.get(cache_key)
+    if cached and (now - cached['ts']) < COMPARE_CACHE_TTL:
+        return cached['data']
+
     # Chuẩn hóa tên tìm kiếm
     search_name = clean_product_name(name)
     base_search_name = extract_model_base(name)
@@ -727,6 +848,12 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
     scored_candidates.sort(key=lambda x: x[0], reverse=True)
     best_model_base = scored_candidates[0][1] if scored_candidates else base_search_name
 
+    # Tính giá thị trường min/max từ tất cả sản phẩm khớp (cho S_Price)
+    market_prices = [parse_price(p.get('price', '')) for p in all_candidates]
+    market_prices = [p for p in market_prices if p > 0]
+    min_market_price = min(market_prices) if market_prices else None
+    max_market_price = max(market_prices) if market_prices else None
+
     # Sử dụng ngày hiện tại từ hệ thống để làm mốc đồng bộ cho cả 8 sàn
     today = datetime.now()
     # Tạo danh sách 7 ngày: [T-6, T-5, T-4, T-3, T-2, T-1, T]
@@ -761,53 +888,54 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
         if target_product:
             p = target_product
             
-            # --- BƯỚC 2: LOGIC BÙ GIÁ (FORWARD FILL) ---
-            # Chuyển lịch sử từ DB thành dict để lookup: { "2026-04-18": 12490000 }
+            # --- BƯỚC 2: LỊCH SỬ GIÁ THỰC (KHÔNG PADDING) ---
+            # Chuyển lịch sử từ DB thành list giá thực tế, KHÔNG forward-fill
             history_dict = {}
             for h in p.get('price_history', []):
                 if h.get('scraped_at'):
                     date_str = h['scraped_at'].strftime("%Y-%m-%d") if hasattr(h['scraped_at'], 'strftime') else str(h['scraped_at'])[:10]
                     history_dict[date_str] = parse_price(h.get('price', ''))
             
-            final_prices = []
-            # Lấy giá hiện tại làm giá mặc định khởi đầu nếu ngày đầu tiên trong chuỗi bị thiếu
-            last_known_price = parse_price(p.get('price', ''))
-            
-            # Sắp xếp lịch sử để tìm giá thực tế cũ nhất có thể
-            sorted_history_dates = sorted(history_dict.keys())
-            if sorted_history_dates:
-                last_known_price = history_dict[sorted_history_dates[0]]
+            # Chỉ lấy giá thực tế, không padding
+            sorted_dates = sorted(history_dict.keys())
+            real_prices = [history_dict[d] for d in sorted_dates if history_dict[d] > 0]
+            current_price = parse_price(p.get('price', ''))
+            if not real_prices and current_price > 0:
+                real_prices = [current_price]
 
-            # Duyệt qua khung ngày chuẩn, nếu thiếu ngày nào thì lấy giá ngày trước đó
-            for d_str in master_date_list:
-                if d_str in history_dict:
-                    last_known_price = history_dict[d_str]
-                final_prices.append(last_known_price)
+            # --- BƯỚC 3: DỮ LIỆU BIỂU ĐỒ THEO TRỤC 7 NGÀY CHUNG (không forward-fill) ---
+            # Bước 2 đã có: sorted_dates (ngày có giá thực), real_prices (giá thực),
+            # current_price. Dựng final_prices dài đúng 7 điểm theo master_date_list,
+            # điểm thiếu -> None (frontend vẽ đường đứt đoạn, không bịa giá).
+            final_prices = [history_dict.get(d_str) or None for d_str in master_date_list]
 
-            # --- BƯỚC 3: DỰ BÁO GIÁ BẰNG LSTM (Model tổng quát) ---
+            # --- BƯỚC 4: DỰ BÁO GIÁ BẰNG LSTM (Model tổng quát) ---
             forecast = 0
-            if lstm_model is not None and scaler is not None and final_prices:
+            insufficient_history = False
+            if lstm_model is not None and scaler is not None and len(real_prices) >= LOOK_BACK:
                 try:
-                    # Sử dụng chuỗi giá đã được làm sạch và bù đắp để dự báo
-                    # Đảm bảo đủ độ dài LOOK_BACK bằng cách padding nếu cần
-                    input_prices = final_prices
-                    if len(input_prices) < LOOK_BACK:
-                        input_prices = [input_prices[0]] * (LOOK_BACK - len(input_prices)) + input_prices
-                    
-                    X_input = np.array(input_prices[-LOOK_BACK:]).reshape(-1, 1)
+                    X_input = np.array(real_prices[-LOOK_BACK:]).reshape(-1, 1)
                     X_scaled = scaler.transform(X_input)
                     pred = lstm_model.predict(X_scaled.reshape(1, LOOK_BACK, 1), verbose=0)
                     forecast = int(scaler.inverse_transform(pred)[0][0])
                 except Exception as e:
                     print(f"Lỗi dự báo {source}: {e}")
-
-            # --- BƯỚC 4: ĐÓNG GÓI KẾT QUẢ ---
-            current_price = parse_price(p.get('price', ''))
-            forecast_price = forecast or current_price
+            else:
+                insufficient_history = True
+                forecast = 0  # Báo không đủ lịch sử giá thực để dự báo
+            
+            # Giá hiển thị = giá cuối lịch sử giá thực (tối mới din lịch sử)
+            forecast_price = forecast if forecast > 0 else current_price
             sentiment_data = analyze_comments_ai(p.get('comments', []))
             
-            # Tính PQS (Product Quality Score)
-            pqs = calculate_pqs(p, sentiment_data)
+            # Tính PQS (Product Quality Score) theo công thức đề tài
+            pqs = calculate_pqs(
+                p, sentiment_data,
+                current_price=current_price,
+                forecast_price=forecast_price,
+                min_market_price=min_market_price,
+                max_market_price=max_market_price
+            )
             pqs_label = get_pqs_label(pqs)
             
             # Tính thống kê giá (Min, Avg, Max, Current)
@@ -832,7 +960,8 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
                 "name": p.get('name'),
                 "current_price": current_price,
                 "forecast": forecast_price,
-                "last_crawl_date": sorted_history_dates[-1] if sorted_history_dates else "N/A",
+                "insufficient_history": insufficient_history,
+                "last_crawl_date": sorted_dates[-1] if sorted_dates else "N/A",
                 "image": p.get('image_url', ''),
                 "sentiment": sentiment_data,
                 "chart": {
@@ -851,7 +980,11 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
 
     # Sắp xếp theo giá tăng dần và trả về 3 sàn rẻ nhất
     store_results.sort(key=lambda r: r["current_price"] or 0)
-    return {"results": store_results[:3]}
+    result = {"results": store_results[:3]}
+
+    # Lưu vào cache
+    compare_cache[cache_key] = {'ts': now, 'data': result}
+    return result
 
 
 # ============================================================
@@ -1021,10 +1154,14 @@ async def get_notifications(user=Depends(auth.get_current_user)):
 
         # Tính lại các chỉ số cho sản phẩm hiện tại
         sentiment_data = analyze_comments_ai(product.get("comments", []))
-        current_pqs = calculate_pqs(product, sentiment_data)
-        price_stats = calculate_price_stats(product.get("price_history", []))
-        price_trend = get_price_trend(current_price, product.get("forecast", 0) or 0)
         forecast_price = (product.get("forecast") or 0) or current_price
+        current_pqs = calculate_pqs(
+            product, sentiment_data,
+            current_price=current_price,
+            forecast_price=forecast_price
+        )
+        price_stats = calculate_price_stats(product.get("price_history", []))
+        price_trend = get_price_trend(current_price, forecast_price)
 
         # ===== 1. GIÁ GIẢM SO VỚI LÚC THÊM =====
         if current_price and added_price and current_price < added_price:

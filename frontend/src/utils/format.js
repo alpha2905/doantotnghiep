@@ -1,22 +1,30 @@
+import fptLogo from '../logos/fpt.jpg'
+import tgddLogo from '../logos/tgdd.jpg'
+import cellphonesLogo from '../logos/cellphones.png'
+import hoanghaLogo from '../logos/hoangha.svg'
+import didongvietLogo from '../logos/didongviet.svg'
+import viettelstoreLogo from '../logos/viettelstore.png'
+import clickbuyLogo from '../logos/clickbuy.png'
+import mobilecityLogo from '../logos/mobilecity.webp'
+
 export const PLATFORM_LOGOS = {
-  'FPT Shop': './logos/fpt.jpg',
-  'Thế Giới Di Động': './logos/tgdd.jpg',
-  'Điện Máy Xanh': './logos/dmx.jpg',
-  'CellphoneS': './logos/cellphones.png',
-  'Hoàng Hà Mobile': './logos/hoangha.svg',
-  'Di Động Việt': './logos/didongviet.svg',
-  'Viettel Store': './logos/viettelstore.png',
-  'Clickbuy': './logos/clickbuy.png',
-  'MobileCity': './logos/mobilecity.webp',
-  // Fallback cũ
-  FPT: './logos/fpt.jpg',
-  TGDD: './logos/tgdd.jpg',
-  DMX: './logos/dmx.jpg'
+  'FPT Shop': fptLogo,
+  'Thế Giới Di Động': tgddLogo,
+  'Điện Máy Xanh': tgddLogo,
+  'CellphoneS': cellphonesLogo,
+  'Hoàng Hà Mobile': hoanghaLogo,
+  'Di Động Việt': didongvietLogo,
+  'Viettel Store': viettelstoreLogo,
+  'Clickbuy': clickbuyLogo,
+  'MobileCity': mobilecityLogo,
+  FPT: fptLogo,
+  TGDD: tgddLogo,
+  DMX: tgddLogo
 }
 
 export function formatPrice(value) {
   if (value === null || value === undefined || isNaN(value)) return '--'
-  return Number(value).toLocaleString('vi-VN') + 'đ'
+  return Number(value).toLocaleString('vi-VN')
 }
 
 export function formatDate(dateString) {

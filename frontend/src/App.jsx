@@ -6,7 +6,7 @@ import {
 } from 'recharts'
 import { Search, TrendingUp, TrendingDown, Minus, ShoppingCart, Clock, AlertTriangle, CheckCircle2, Sparkles, Zap, ExternalLink, RefreshCw, Heart, LogIn, LogOut, Bell, User, X, Moon, Sun, ArrowUp, Scale, Check } from 'lucide-react'
 import {
-  PLATFORM_LOGOS, formatPrice, formatDate, getRandomComments, fillMissingDates,
+  PLATFORM_LOGOS, formatPrice, getRandomComments, fillMissingDates,
   PQS_COLORS, REC_COLORS, SENTIMENT_CONFIG, getRqsColor
 } from './utils/format'
 import { requestFcmToken, onForegroundMessage } from './firebase'
@@ -85,10 +85,6 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
           className="platform-logo"
           onError={(e) => { e.target.style.display = 'none' }}
         />
-        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-          <span className="platform-badge">{product.platform}</span>
-          <span className="date-badge">📅 {formatDate(product.last_crawl_date)}</span>
-        </div>
       </div>
 
       {/* Image */}
@@ -200,7 +196,13 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
           </div>
           <div className="price-stat">
             <div className="price-stat-label">Giá dự báo</div>
-            <div className="price-stat-value" style={{ color: 'var(--purple-600)' }}>{formatPrice(product.forecast)}</div>
+            <div className="price-stat-value" style={{ color: 'var(--purple-600)' }}>
+              {product.insufficient_history || !product.forecast ? (
+                <span style={{ fontSize: '0.75rem', color: 'var(--slate-400)' }}>Chưa đủ lịch sử (&lt;5 ngày)</span>
+              ) : (
+                formatPrice(product.forecast)
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -209,9 +211,6 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
       <div className="forecast-section">
         <div className="forecast-header">
           <span>🔮 Dự báo giá LSTM</span>
-          <span className="forecast-price">
-            {lstmMetrics ? `Chính xác dự báo: ${lstmMetrics.accuracy}%` : ''} • Giá dự báo: {formatPrice(product.forecast)}
-          </span>
         </div>
         <div className="chart-container">
           <ResponsiveContainer width="100%" height="100%">
@@ -231,27 +230,6 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
                 labelFormatter={() => ''}
                 contentStyle={{ borderRadius: 12, border: '1px solid var(--chart-border)', fontSize: 12, background: 'var(--tooltip-bg)', color: 'var(--text-primary)' }}
               />
-              <ReferenceLine
-                y={priceStats?.max}
-                stroke="var(--red-600)"
-                strokeDasharray="4 4"
-                strokeWidth={1.5}
-                label={{ value: 'Cao nhất', position: 'insideTopRight', fontSize: 9, fill: 'var(--red-600)' }}
-              />
-              <ReferenceLine
-                y={priceStats?.avg}
-                stroke="var(--blue-600)"
-                strokeDasharray="4 4"
-                strokeWidth={1.5}
-                label={{ value: 'Trung bình', position: 'insideTopRight', fontSize: 9, fill: 'var(--blue-600)' }}
-              />
-              <ReferenceLine
-                y={priceStats?.min}
-                stroke="var(--green-600)"
-                strokeDasharray="4 4"
-                strokeWidth={1.5}
-                label={{ value: 'Thấp nhất', position: 'insideTopRight', fontSize: 9, fill: 'var(--green-600)' }}
-              />
               <Line
                 type="monotone"
                 dataKey="price"
@@ -268,7 +246,7 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
       {/* LSTM Metrics */}
       {lstmMetrics && (
         <div className="lstm-metrics">
-          <div className="lstm-title">📈 Đánh giá độ chính xác LSTM</div>
+          <div className="lstm-title">📈 Độ chính xác LSTM (Kiểm thử Lịch sử)</div>
           <div className="lstm-grid">
             <div className="lstm-item lstm-mae">
               <div className="lstm-item-label">MAE</div>
@@ -428,7 +406,12 @@ function EmptyProductCard({ platform }) {
   return (
     <div className="empty-product-card">
       <div className="card-header">
-        <span className="platform-badge">{platform}</span>
+        <img
+          src={PLATFORM_LOGOS[platform] || PLATFORM_LOGOS.FPT}
+          alt={platform}
+          className="platform-logo"
+          onError={(e) => { e.target.style.display = 'none' }}
+        />
       </div>
       <div className="empty-product-icon">🔍</div>
       <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
@@ -648,7 +631,9 @@ function App() {
   const [scrolled, setScrolled] = useState(false)
   const [showScrollTop, setShowScrollTop] = useState(false)
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [suggestions, setSuggestions] = useState([])
   const searchInputRef = useRef(null)
+  const suggestTimerRef = useRef(null)
 
   // Theme
   useEffect(() => {
@@ -713,6 +698,34 @@ function App() {
       setLoading(false)
     }
   }, [query])
+
+  const fetchSuggestions = useCallback(async (q) => {
+    if (!q || q.trim().length < 2) {
+      setSuggestions([])
+      return
+    }
+    try {
+      const res = await axios.get(`${API_URL}/api/suggest`, {
+        params: { name: q.trim(), limit: 8 },
+        timeout: 10000
+      })
+      setSuggestions(res.data.suggestions || [])
+    } catch (err) {
+      console.error('Suggest error:', err)
+      setSuggestions([])
+    }
+  }, [])
+
+  const handleInputChange = (e) => {
+    const val = e.target.value
+    setQuery(val)
+    setShowSuggestions(true)
+    // Debounce 300ms để tránh gọi API quá nhiều
+    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current)
+    suggestTimerRef.current = setTimeout(() => {
+      fetchSuggestions(val)
+    }, 300)
+  }
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') handleSearch()
@@ -914,7 +927,6 @@ function App() {
           <div className="logo">
             <div className="logo-icon"><Sparkles size={20} /></div>
             <div className="logo-text">Smart<span>Shopping</span></div>
-            <span className="logo-badge">AI</span>
           </div>
 
           <div className="search-container">
@@ -923,18 +935,30 @@ function App() {
               <input
                 ref={searchInputRef}
                 className="search-input"
-                placeholder="Tìm kiếm sản phẩm... (VD: iPhone 15 Pro Max, Samsung Galaxy S24...)"
+                placeholder="Tìm kiếm sản phẩm..."
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
               />
-              {showSuggestions && query && filteredSuggestions.length > 0 && (
+              {showSuggestions && query && suggestions.length > 0 && (
                 <div className="search-suggestions">
-                  {filteredSuggestions.map((s, i) => (
-                    <button key={i} className="suggestion-item" onClick={() => { setQuery(s); handleSearch(s) }}>
-                      <Search size={14} /> {s}
+                  {suggestions.map((s, i) => (
+                    <button key={i} className="suggestion-item" onClick={() => { setQuery(s.name); handleSearch(s.name) }}>
+                      <img
+                        src={s.image}
+                        alt=""
+                        className="sug-img"
+                        onError={(e) => { e.target.style.display = 'none' }}
+                      />
+                      <div className="sug-info">
+                        <div className="sug-name">{s.name}</div>
+                        <div className="sug-meta">
+                          <span className="sug-platform">{s.platform}</span>
+                          {s.price > 0 && <span className="sug-price">{formatPrice(s.price)}</span>}
+                        </div>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -986,9 +1010,7 @@ function App() {
           <div className="hero-flex">
             <div>
               <div className="hero-title">Mua sắm thông minh, tiết kiệm tối đa</div>
-              <div className="hero-subtitle">
-                So sánh giá 8 sàn FPT Shop, Thế Giới Di Động, CellphoneS, Hoàng Hà Mobile, Di Động Việt, Viettel Store, Clickbuy, MobileCity • Phân tích cảm xúc bình luận bằng PhoBERT • Dự báo giá bằng LSTM
-              </div>
+        
               <div className="hero-stats">
                 <div className="hero-stat">
                   <div className="hero-stat-value">8</div>
@@ -998,38 +1020,20 @@ function App() {
                   <div className="hero-stat-value">1000+</div>
                   <div className="hero-stat-label">Sản phẩm</div>
                 </div>
-                <div className="hero-stat">
-                  <div className="hero-stat-value">95%</div>
-                  <div className="hero-stat-label">Độ chính xác AI</div>
-                </div>
               </div>
             </div>
             <div className="hero-right">
-              <div className="hero-badge">🤖 AI-Powered Shopping Assistant</div>
               <div className="hero-chips">
-                <div className="hero-chip" style={{ animationDelay: '0.2s' }}>
-                  <Zap size={14} /> Giá rẻ nhất
-                </div>
                 <div className="hero-chip" style={{ animationDelay: '0.4s' }}>
-                  <Sparkles size={14} /> PhoBERT
+                  <Sparkles size={14} /> PhoBERT AI
                 </div>
                 <div className="hero-chip" style={{ animationDelay: '0.6s' }}>
-                  <TrendingUp size={14} /> LSTM Forecast
+                  <TrendingUp size={14} /> LSTM AI
                 </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Popular searches */}
-      <div className="popular-searches">
-        <span className="popular-label">🔥 Tìm kiếm nhanh:</span>
-        {POPULAR_SEARCHES.slice(0, 6).map((s, i) => (
-          <button key={i} className="popular-chip" onClick={() => { setQuery(s); handleSearch(s) }}>
-            {s}
-          </button>
-        ))}
       </div>
 
       {/* Main Content */}

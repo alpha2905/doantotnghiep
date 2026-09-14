@@ -12,6 +12,9 @@ ENV/
 # Model files (large, not for git)
 model/phobert_models/
 backend/phobert_models/
+backend/model/
+backend_new/model/
+backend_new/models/
 backend/models/*.keras
 backend/models/*.pkl
 backend/models/*.h5
@@ -28,10 +31,15 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 
+# Expo cache / generated artifacts (NOT for git)
+mobile/.expo/
+*.keystore
+
 # Environment
 .env
 .env.local
 backend/serviceAccountKey.json
+backend_new/serviceAccountKey.json
 
 # IDE
 .vscode/
@@ -49,3 +57,6 @@ logs/
 data/*.jsonl
 data/*.csv
 data/*.xlsx
+backend/data/*.jsonl
+backend/results/
+backend/model/results/

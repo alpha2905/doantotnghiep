@@ -1,0 +1,47 @@
+pqs_weights:
+  rating:
+    value: 0.25
+    rationale: "Trọng số 25% cho đánh giá sao cửa hàng. Phản ánh uy tín nền tảng, nhưng không phụ thuộc hoàn toàn vào vì nhiều sản phẩm mới chưa có đánh giá."
+  sentiment:
+    value: 0.30
+    rationale: "Trọng số cao nhất 30% cho phân tích cảm xúc bình luận. PhoBERT phân tích thực tế ngôn ngữ người dùng, đây là tín hiệu mạnh nhất về chất lượng sản phẩm thực tế."
+  shop_reputation:
+    value: 0.15
+    rationale: "Trọng số 15% cho uy tín cửa hàng/sàn. Cửa hàng lớn có chính sách đổi trả tốt, giảm rủi ro cho người mua."
+  positive_rate:
+    value: 0.15
+    rationale: "Trọng số 15% cho tỷ lệ bình luận tích cực. Bổ sung cho sentiment score, phản ánh mức độ hài lòng tổng thể."
+  sold_volume:
+    value: 0.15
+    rationale: "Trọng số 15% cho số lượng đã bán. Sản phẩm bán chạy thường có độ tin cậy cao hơn."
+
+rqs_weights:
+  sentiment_score:
+    value: 0.50
+    rationale: "Độ dài bình luận và nhãn cảm xúc quyết định 50% điểm RQS. Bình luận dài + tích cực = thông tin giá trị cao."
+  length_score:
+    value: 0.20
+    rationale: "Bình luận dài (>=100 từ) thường chi tiết hơn, có thông tin hữu ích hơn."
+  helpful_votes:
+    value: 0.15
+    rationale: "Số người thấy hữu ích phản ánh độ tin cậy của bình luận."
+  verified_purchase:
+    value: 0.15
+    rationale: "Người dùng đã mua hàng thật có đánh giá khách quan hơn."
+
+recommendation_thresholds:
+  buy_now:
+    pqs_min: 85
+    trend_required: "increasing"
+    note: "PQS >= 85 và xu hướng giá tăng -> Nên mua ngay kẻo lỡ"
+  buy:
+    pqs_min: 70
+    note: "PQS >= 70 -> Nên mua"
+  wait:
+    pqs_max: 70
+    note: "PQS < 70 -> Chờ đợi"
+
+note: >
+  Các trọng số trên là heuristic của prototype, được xây dựng dựa trên
+  kinh nghiệm thực tế và chưa được tối ưu hóa bằng khảo sát người dùng.
+  Cần điều chỉnh theo dữ liệu thực tế và phản hồi người dùng trong giai đoạn tiếp theo.

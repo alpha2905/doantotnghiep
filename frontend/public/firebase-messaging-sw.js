@@ -1,5 +1,7 @@
 // Service Worker cho Firebase Cloud Messaging
 // Project: datn-2905
+// ⚠️ File này được copy vào frontend/dist khi build (xem vite.config.js).
+// Không sửa bản trong dist/ bằng tay — mọi thay đổi sửa ở đây.
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js')
 importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js')
 

@@ -1,0 +1,31 @@
+# Render Blueprint — deploy backend 1 click bằng file này.
+# Dashboard Render → New → Blueprint → trỏ tới repo.
+services:
+  - type: web
+    name: datn-price-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    plan: standard # PhoBERT+LSTM cần ≥2GB RAM; free 512MB sẽ OOM
+    healthCheckPath: /health
+    envVars:
+      - key: MONGO_URI
+        sync: false # khai báo tay trong dashboard Render
+      - key: MONGO_DB_NAME
+        value: price_tracker
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: JWT_EXPIRE_HOURS
+        value: 168
+      - key: ADMIN_EMAILS
+        sync: false # ví dụ: nguyenhoangan@example.com
+      - key: FRONTEND_ORIGINS
+        sync: false # ví dụ: https://datn-2905.web.app
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        value: /app/backend/serviceAccountKey.json
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false # dán nội dung JSON service account vào dashboard
+      - key: EXPO_ACCESS_TOKEN
+        sync: false # Expo push token cho mobile (để gửi push notification)

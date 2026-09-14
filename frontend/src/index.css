@@ -388,6 +388,49 @@ body {
   color: var(--primary);
 }
 
+.sug-img {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: var(--bg-muted);
+  flex-shrink: 0;
+}
+
+.sug-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.sug-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sug-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.68rem;
+}
+
+.sug-platform {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.sug-price {
+  color: var(--primary);
+  font-weight: 700;
+}
+
 .search-btn {
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: white;
@@ -665,25 +708,19 @@ body {
 
 .card-header {
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  justify-content: center;
+  align-items: center;
   margin-bottom: 1rem;
+  width: 100%;
 }
 
 .platform-logo {
-  height: 36px;
-  width: auto;
+  height: 40px;
+  max-width: 160px;
   object-fit: contain;
   border-radius: 8px;
-}
-
-.platform-badge {
-  background: var(--chip-bg);
-  color: var(--text-secondary);
-  font-size: 0.65rem;
-  font-weight: 800;
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
+  margin: 0 auto;
+  display: block;
 }
 
 .date-badge {

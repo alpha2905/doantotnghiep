@@ -2,12 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { User, LogOut, Heart, Bell, ChevronRight } from 'lucide-react-native';
-import { User as UserType } from '../types';
+import { User } from '../types';
 import { authApi, storage } from '../services/api';
 import { COLORS, SIZES } from '../constants/theme';
 
 const ProfileScreen: React.FC<{ navigation: any }> = ({ navigation }) => {
-  const [user, setUser] = useState<UserType | null>(null);
+  const [user, setUser] = useState<User | null>(null);
 
   useEffect(() => {
     loadUser();

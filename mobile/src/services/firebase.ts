@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import { tokenApi } from './api';
 
 Notifications.setNotificationHandler({
@@ -34,9 +35,13 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
       alert('Không thể lấy quyền thông báo!');
       return null;
     }
-    const tokenData = await Notifications.getExpoPushTokenAsync({
-      projectId: 'your-project-id',
-    });
+    // projectId lấy từ app.json (extra.eas.projectId) thay vì hard-code.
+    // Khi chưa có EAS project (dev local), để undefined để Expo dùng push token mặc định.
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ?? undefined;
+    const tokenData = await Notifications.getExpoPushTokenAsync(
+      projectId ? { projectId } : undefined,
+    );
     token = tokenData.data;
   } else {
     alert('Phải sử dụng thiết bị vật lý để nhận thông báo đẩy');
@@ -56,3 +61,4 @@ export async function setupNotifications(): Promise<string | null> {
   }
   return expoPushToken;
 }
+

@@ -1,3 +1,5 @@
+import Constants from 'expo-constants';
+
 export const COLORS = {
   primary: '#6366f1',
   primaryDark: '#4f46e5',
@@ -55,9 +57,14 @@ export const PLATFORMS = [
   'MobileCity',
 ];
 
-export const API_URL = __DEV__
-  ? 'http://192.168.1.100:8000'
-  : 'https://your-backend-domain.com';
+// Ưu tiên biến môi trường EXPO_PUBLIC_API_URL (build EAS / CI),
+// fallback về extra.apiUrl trong app.json, cuối cùng là LAN dev.
+// ⚠️ Khi build production: eas build -- ... hoặc set EXPO_PUBLIC_API_URL
+// trỏ tới URL public của backend (Render/Railway), KHÔNG để IP LAN.
+export const API_URL: string =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (Constants.expoConfig?.extra as { apiUrl?: string } | undefined)?.apiUrl ??
+  'http://192.168.1.100:8000';
 
 export const POPULAR_SEARCHES = [
   'iPhone 15 Pro Max',

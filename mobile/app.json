@@ -27,6 +27,12 @@
       "bundler": "metro",
       "output": "single"
     },
+    "extra": {
+      "apiUrl": "http://192.168.2.16:8000",
+      "eas": {
+        "projectId": "00000000-0000-0000-0000-000000000000"
+      }
+    },
     "plugins": [
       [
         "expo-notifications",
@@ -34,7 +40,8 @@
           "icon": "./assets/notification-icon.png",
           "color": "#6366f1"
         }
-      ]
+      ],
+      "expo-asset"
     ]
   }
 }

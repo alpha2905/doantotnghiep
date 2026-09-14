@@ -234,9 +234,6 @@ const ProductCard: React.FC<Props> = ({
         <View style={styles.chartSection}>
           <View style={styles.chartHeader}>
             <Text style={styles.chartTitle}>🔮 Dự báo giá LSTM</Text>
-            <Text style={styles.chartSubtitle}>
-              {lstmMetrics ? `Chính xác: ${lstmMetrics.accuracy}%` : ''} • Giá dự báo: {formatPrice(product.forecast)}
-            </Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <LineChart

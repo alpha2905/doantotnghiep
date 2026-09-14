@@ -1,4 +1,20 @@
+"""
+Scraper & Price Updater Module for 8 E-Commerce Platforms:
+- FPT Shop
+- Thế Giới Di Động (TGDD)
+- CellphoneS
+- Hoàng Hà Mobile
+- Di Động Việt
+- Viettel Store
+- Clickbuy
+- MobileCity
+
+Vào từng link sản phẩm trong MongoDB, cào giá mới nhất, và cập nhật price_history
+phục vụ huấn luyện & dự báo giá bằng mô hình LSTM.
+"""
+
 import os
+import sys
 import re
 import json
 import asyncio
@@ -9,6 +25,12 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 import aiohttp
 from bs4 import BeautifulSoup
+
+# Unicode encoding fix cho Windows Console
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 try:
     from curl_cffi import requests as curl_requests
@@ -26,34 +48,18 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
 ]
 
-USER_AGENT = random.choice(USER_AGENTS)
-
-
-def get_headers(referer: str = None) -> Dict[str, str]:
-    """Build realistic browser headers to avoid 403 blocks."""
-    headers = {
-        "User-Agent": random.choice(USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
-        "Cache-Control": "max-age=0",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"Windows"',
-    }
-    if referer:
-        headers["Referer"] = referer
-    return headers
+STORE_COLLECTIONS = {
+    "FPT Shop": "fpt",
+    "Thế Giới Di Động": "tgdd",
+    "CellphoneS": "cellphones",
+    "Hoàng Hà Mobile": "hoangha",
+    "Di Động Việt": "didongviet",
+    "Viettel Store": "viettelstore",
+    "Clickbuy": "clickbuy",
+    "MobileCity": "mobilecity",
+}
 
 PLATFORM_DOMAINS = {
     "FPT Shop": "fptshop.com.vn",
@@ -66,16 +72,30 @@ PLATFORM_DOMAINS = {
     "MobileCity": "mobilecity.vn",
 }
 
-# Platforms known to block aiohttp (TLS fingerprint) -> use curl_cffi FIRST
-BLOCKED_PLATFORMS = {
-    "FPT Shop",
-}
+BLOCKED_PLATFORMS = {"FPT Shop"}
+
+MIN_VALID_PRICE = 500000        # 500.000đ (loại bỏ phụ kiện/trả góp)
+MAX_VALID_PRICE = 100000000     # 100.000.000đ
 
 
-def clean_price_text(text: str) -> int:
+def get_headers(referer: Optional[str] = None) -> Dict[str, str]:
+    headers = {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
+    if referer:
+        headers["Referer"] = referer
+    return headers
+
+
+def clean_price_text(text: Any) -> int:
     if not text:
         return 0
-    digits = re.sub(r"[^\d]", "", text)
+    digits = re.sub(r"[^\d]", "", str(text))
     if not digits:
         return 0
     try:
@@ -84,19 +104,13 @@ def clean_price_text(text: str) -> int:
         return 0
 
 
-def fetch_with_curl_cffi(url: str, timeout: int = 20, max_retries: int = 3) -> Optional[str]:
-    """Fetch a page using curl_cffi with Chrome TLS impersonation.
-
-    This bypasses TLS fingerprinting blocks (e.g. FPT Shop blocking aiohttp/python requests).
-    Retries with backoff on HTTP 503 (rate limiting).
-    """
+def fetch_with_curl_cffi(url: str, timeout: int = 20, max_retries: int = 2) -> Optional[str]:
     if not CURL_AVAILABLE:
-        logger.warning("[Scraper] curl_cffi not installed, skipping TLS impersonation fetch")
         return None
-
     for attempt in range(1, max_retries + 1):
         try:
-            headers = get_headers(referer=f"https://{url.split('/')[2]}/")
+            domain = url.split("/")[2] if "/" in url else ""
+            headers = get_headers(referer=f"https://{domain}/")
             resp = curl_requests.get(
                 url,
                 headers=headers,
@@ -106,57 +120,29 @@ def fetch_with_curl_cffi(url: str, timeout: int = 20, max_retries: int = 3) -> O
             )
             if resp.status_code == 200:
                 text = resp.text
-                if text and len(text) > 500:
-                    logger.info(f"[Scraper] curl_cffi (Chrome impersonation) fetch succeeded for {url}")
+                if text and len(text) > 1000:
                     return text
-                logger.warning(f"[Scraper] curl_cffi returned empty/short content for {url}")
             elif resp.status_code == 503 and attempt < max_retries:
-                # Rate limited -> wait and retry with backoff
-                wait = 2 ** attempt + random.uniform(0.5, 1.5)
-                logger.warning(
-                    f"[Scraper] curl_cffi HTTP 503 for {url} (attempt {attempt}/{max_retries}), "
-                    f"retrying in {wait:.1f}s..."
-                )
-                time.sleep(wait)
-                continue
-            else:
-                logger.warning(f"[Scraper] curl_cffi HTTP {resp.status_code} for {url}")
+                time.sleep(1.5 * attempt)
         except Exception as e:
-            logger.error(f"[Scraper] curl_cffi fetch error for {url}: {e}")
-            if attempt < max_retries:
-                await_sleep = 2 ** attempt
-                logger.warning(f"[Scraper] Retrying in {await_sleep}s...")
-                time.sleep(await_sleep)
-
+            logger.debug(f"[Scraper] curl_cffi attempt {attempt} failed for {url}: {e}")
     return None
 
 
 async def fetch_page(
     session: aiohttp.ClientSession,
     url: str,
-    timeout: int = 8,
-    max_retries: int = 3,
+    timeout: int = 12,
     prefer_curl: bool = False,
 ) -> Optional[str]:
-    """Fetch a page with realistic browser headers.
-
-    Strategy (optimized for local runs):
-      0) If prefer_curl: try curl_cffi FIRST (bypasses TLS fingerprint blocks, e.g. FPT Shop)
-      1) aiohttp direct (1 attempt, fast)
-      2) curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
-      3) r.jina.ai free reader proxy (bypasses IP blocks)
-    """
-    # 0) Prefer curl_cffi for platforms known to block aiohttp (e.g. FPT Shop)
     if prefer_curl:
-        logger.info(f"[Scraper] prefer_curl=True, trying curl_cffi first for {url}")
         html = await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
         if html:
             return html
-        logger.warning(f"[Scraper] curl_cffi failed for {url}, falling back to aiohttp...")
 
-    # 1) Direct attempt (single, fast)
     try:
-        headers = get_headers(referer=f"https://{url.split('/')[2]}/")
+        domain = url.split("/")[2] if "/" in url else ""
+        headers = get_headers(referer=f"https://{domain}/")
         async with session.get(
             url,
             headers=headers,
@@ -164,127 +150,90 @@ async def fetch_page(
             allow_redirects=True,
         ) as resp:
             if resp.status == 200:
-                return await resp.text()
-            elif resp.status in (403, 429):
-                logger.warning(f"[Scraper] HTTP {resp.status} for {url}, trying curl_cffi...")
-            else:
-                logger.warning(f"[Scraper] HTTP {resp.status} for {url}")
-                return None
-    except Exception as e:
-        logger.error(f"[Scraper] Fetch error for {url}: {e}")
-
-    # 2) Try curl_cffi with Chrome TLS impersonation (bypasses TLS fingerprint blocks)
-    if not prefer_curl:
-        logger.warning(f"[Scraper] Direct fetch failed for {url}, trying curl_cffi (Chrome impersonation)...")
-        html = await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
-        if html:
-            return html
-
-    # 3) Fallback: fetch via r.jina.ai free reader proxy (bypasses IP blocks)
-    logger.warning(f"[Scraper] curl_cffi failed for {url}, trying r.jina.ai proxy...")
-    proxy_url = f"https://r.jina.ai/{url}"
-    try:
-        proxy_headers = {
-            "User-Agent": random.choice(USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "X-Return-Format": "html",
-        }
-        async with session.get(
-            proxy_url,
-            headers=proxy_headers,
-            timeout=aiohttp.ClientTimeout(total=timeout + 10),
-            allow_redirects=True,
-        ) as resp:
-            if resp.status == 200:
                 text = await resp.text()
-                if text and len(text) > 500:
-                    logger.info(f"[Scraper] Proxy fetch succeeded for {url}")
+                if text and len(text) > 1000:
                     return text
-                logger.warning(f"[Scraper] Proxy returned empty/short content for {url}")
-            else:
-                logger.warning(f"[Scraper] Proxy HTTP {resp.status} for {url}")
+            elif resp.status in (403, 429) and not prefer_curl:
+                return await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
     except Exception as e:
-        logger.error(f"[Scraper] Proxy fetch error for {url}: {e}")
+        logger.debug(f"[Scraper] aiohttp fetch error for {url}: {e}")
+        if not prefer_curl:
+            return await asyncio.to_thread(fetch_with_curl_cffi, url, timeout)
 
-    logger.error(f"[Scraper] Failed to fetch {url} after all attempts")
     return None
 
 
-def extract_price_from_json_ld(soup: BeautifulSoup) -> Optional[int]:
-    for tag in soup.find_all("script", type="application/ld+json"):
+def extract_price_robust(html: str, soup: BeautifulSoup) -> int:
+    """Thuật toán trích xuất giá điện thoại chuẩn xác từ HTML 8 sàn."""
+    # 1. Kiểm tra JSON-LD
+    for s in soup.find_all("script", type="application/ld+json"):
         try:
-            data = json.loads(tag.string or "")
+            data = json.loads(s.string or "")
             if isinstance(data, dict):
                 offers = data.get("offers")
                 if isinstance(offers, dict):
-                    price = offers.get("price")
-                    if price:
-                        return clean_price_text(str(price))
+                    p = clean_price_text(offers.get("price"))
+                    if MIN_VALID_PRICE <= p <= MAX_VALID_PRICE:
+                        return p
                 elif isinstance(offers, list) and offers:
-                    price = offers[0].get("price")
-                    if price:
-                        return clean_price_text(str(price))
+                    p = clean_price_text(offers[0].get("price"))
+                    if MIN_VALID_PRICE <= p <= MAX_VALID_PRICE:
+                        return p
         except Exception:
-            continue
-    return None
+            pass
 
-
-def extract_price_from_meta(soup: BeautifulSoup) -> Optional[int]:
-    selectors = [
-        'meta[itemprop="price"]',
+    # 2. Meta tags
+    meta_selectors = [
         'meta[property="product:price:amount"]',
+        'meta[itemprop="price"]',
         'meta[name="twitter:data2"]',
     ]
-    for sel in selectors:
+    for sel in meta_selectors:
         tag = soup.select_one(sel)
         if tag:
-            content = tag.get("content", "")
-            price = clean_price_text(content)
-            if price:
-                return price
-    return None
+            p = clean_price_text(tag.get("content", ""))
+            if MIN_VALID_PRICE <= p <= MAX_VALID_PRICE:
+                return p
 
+    # 3. CSS Price Selectors chính chủ từng sàn
+    dom_selectors = [
+        ".box-price-present", ".bs-price", ".price-current", ".giaban",
+        ".product__price--show", ".current-product-price", ".price-new",
+        ".special-price", "p.price", "span.price", "div.price", ".product-price"
+    ]
+    for sel in dom_selectors:
+        for tag in soup.select(sel):
+            p = clean_price_text(tag.text)
+            if MIN_VALID_PRICE <= p <= MAX_VALID_PRICE:
+                return p
 
-def extract_price_from_text(soup: BeautifulSoup) -> Optional[int]:
-    candidates = []
-    for el in soup.find_all(text=re.compile(r"\d{3,}")):  # 3+ digits
-        parent = el.parent
-        if parent:
-            text = el.strip()
-            if re.search(r"₫|VND|đồng|giá|price", parent.get_text(" ", strip=True), re.IGNORECASE):
-                candidates.append(text)
+    # 4. Tìm các biến JS chứa giá (cho TGDD / FPT / CellphoneS SPA)
+    js_patterns = [
+        r'["\']?price_current["\']?\s*:\s*(\d{7,9})',
+        r'["\']?price_present["\']?\s*:\s*(\d{7,9})',
+        r'["\']?Price["\']?\s*:\s*(\d{7,9})',
+        r'["\']?price["\']?\s*:\s*(\d{7,9})',
+        r'["\']?sale_price["\']?\s*:\s*(\d{7,9})',
+        r'["\']?final_price["\']?\s*:\s*(\d{7,9})',
+    ]
+    for pat in js_patterns:
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            val = int(m.group(1))
+            if MIN_VALID_PRICE <= val <= MAX_VALID_PRICE:
+                return val
 
-    for text in candidates:
-        price = clean_price_text(text)
-        if 10000 <= price <= 500000000:  # reasonable price range for electronics
-            return price
-    return None
-
-
-def extract_price_from_plain_text(raw_text: str) -> Optional[int]:
-    """Extract price from plain text / markdown (e.g. r.jina.ai proxy output)."""
-    if not raw_text:
-        return None
-
-    # Look for price patterns like "12.990.000₫", "12,990,000 VND", "12.990.000 đ"
+    # 5. Regex định dạng giá VNĐ (ví dụ: 29.990.000đ)
     patterns = [
-        r"(\d{1,3}(?:[.,]\d{3})+)\s*(?:₫|đ|VND|vnđ|đồng)",
-        r"(?:₫|đ|VND|vnđ|đồng)\s*(\d{1,3}(?:[.,]\d{3})+)",
-        r"(\d{1,3}(?:[.,]\d{3})+)\s*₫",
+        r'(\d{1,3}(?:\.\d{3}){2,3})\s*(?:₫|đ|VND|vnđ)',
+        r'(\d{1,3}(?:,\d{3}){2,3})\s*(?:₫|đ|VND|vnđ)',
     ]
     for pat in patterns:
-        for m in re.finditer(pat, raw_text, re.IGNORECASE):
-            price = clean_price_text(m.group(1))
-            if 10000 <= price <= 500000000:
-                return price
+        for m in re.finditer(pat, html, re.IGNORECASE):
+            p = clean_price_text(m.group(1))
+            if MIN_VALID_PRICE <= p <= MAX_VALID_PRICE:
+                return p
 
-    # Fallback: any large number near "giá" / "price"
-    for m in re.finditer(r"(?:giá|price|Giá bán|Giá):?\s*(\d{1,3}(?:[.,]\d{3})+)", raw_text, re.IGNORECASE):
-        price = clean_price_text(m.group(1))
-        if 10000 <= price <= 500000000:
-            return price
-
-    return None
+    return 0
 
 
 async def scrape_platform_price(
@@ -293,24 +242,22 @@ async def scrape_platform_price(
     product_url: str,
     prefer_curl: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    domain = PLATFORM_DOMAINS.get(platform)
-    if not domain or not product_url or product_url == "#":
+    if not product_url or product_url == "#":
         return None
 
     html = await fetch_page(session, product_url, prefer_curl=prefer_curl)
-    if not html:
+    if not html or len(html) < 1000:
+        return None
+
+    # Phát hiện trang 404 / redirect trang chủ (ví dụ TGDD trang ngừng kinh doanh)
+    if "Thegioididong.com - Điện thoại, Laptop" in html and len(html) < 15000:
+        logger.warning(f"[Scraper] Trang không khả dụng (đã chuyển hướng trang chủ): {product_url}")
         return None
 
     soup = BeautifulSoup(html, "html.parser")
+    price = extract_price_robust(html, soup)
 
-    price = (
-        extract_price_from_json_ld(soup)
-        or extract_price_from_meta(soup)
-        or extract_price_from_text(soup)
-        or extract_price_from_plain_text(html)
-    )
-
-    if not price:
+    if not price or price <= 0:
         logger.warning(f"[Scraper] No price found for {platform}: {product_url}")
         return None
 
@@ -323,18 +270,31 @@ async def scrape_platform_price(
     }
 
 
-async def update_product_real_price(db, product: Dict[str, Any], price_data: Dict[str, Any]) -> bool:
+async def update_product_real_price(db_col, product: Dict[str, Any], price_data: Dict[str, Any]) -> bool:
     now = price_data.get("last_scraped_at", datetime.now(timezone.utc))
     price_history = product.get("price_history", []) or []
 
-    price_history.append({
-        "date": now.strftime("%Y-%m-%d"),
-        "price": price_data["price_number"],
-        "scraped_at": now,
-        "source": "live_scraper",
-    })
+    today_str = now.strftime("%Y-%m-%d")
 
-    await db.update_one(
+    # Kiểm tra xem hôm nay đã có bản ghi lịch sử chưa, nếu có thì cập nhật, chưa thì append
+    updated_history = False
+    for h in price_history:
+        h_date = h.get("date") or (h.get("scraped_at").strftime("%Y-%m-%d") if hasattr(h.get("scraped_at"), "strftime") else str(h.get("scraped_at"))[:10])
+        if h_date == today_str:
+            h["price"] = price_data["price_number"]
+            h["scraped_at"] = now
+            updated_history = True
+            break
+
+    if not updated_history:
+        price_history.append({
+            "date": today_str,
+            "price": price_data["price_number"],
+            "scraped_at": now,
+            "source": "live_scraper",
+        })
+
+    await db_col.update_one(
         {"_id": product["_id"]},
         {
             "$set": {
@@ -348,86 +308,72 @@ async def update_product_real_price(db, product: Dict[str, Any], price_data: Dic
     return True
 
 
-async def update_prices_real(db, product_limit: int = 0, concurrency: int = 4):
-    """Update real prices for all products (or up to product_limit if > 0).
-
-    product_limit <= 0 means ALL products in the collection.
-    concurrency controls how many products are scraped in parallel per platform.
-    """
+async def update_prices_real(db, product_limit: int = 0, concurrency: int = 15, fpt_concurrency: int = 5):
+    """Cập nhật giá thực tế từ link cho tất cả sản phẩm trong DB (chạy đa luồng song song)."""
     now = datetime.now(timezone.utc)
     updated_count = 0
     failed_count = 0
 
-    async with aiohttp.ClientSession() as session:
+    # Tăng giới hạn kết nối đồng thời trong aiohttp ClientSession
+    connector = aiohttp.TCPConnector(limit=100, limit_per_host=30)
+    async with aiohttp.ClientSession(connector=connector) as session:
         for source, collection_name in STORE_COLLECTIONS.items():
             col = db[collection_name]
-            cursor = col.find({})
+            cursor = col.find({"product_url": {"$exists": True, "$ne": "", "$ne": "#"}})
             if product_limit and product_limit > 0:
                 cursor = cursor.limit(product_limit)
             products = await cursor.to_list(length=product_limit if product_limit and product_limit > 0 else None)
 
+            total_store = len(products)
+            if not products:
+                print(f"📦 [{source}] Không tìm thấy sản phẩm nào trong DB.", flush=True)
+                continue
+
             prefer_curl = source in BLOCKED_PLATFORMS
+            # FPT Shop (curl_cffi): fpt_concurrency (mặc định 5), các sàn khác: concurrency (mặc định 15)
+            store_concurrency = fpt_concurrency if prefer_curl else concurrency
+            print(f"\n🚀 [{source}] Đang chạy ĐA LUỒNG ({store_concurrency} luồng song song) cho {total_store} sản phẩm...", flush=True)
 
-            # Platforms that rate-limit aggressively (e.g. FPT Shop) -> serialize + delay
-            if source in BLOCKED_PLATFORMS:
-                sem = asyncio.Semaphore(1)
-                request_delay = (1.5, 2.5)
-            else:
-                sem = asyncio.Semaphore(concurrency)
-                request_delay = (0.3, 0.8)
+            sem = asyncio.Semaphore(store_concurrency)
+            request_delay = (0.3, 0.6) if prefer_curl else (0.02, 0.08)
 
-            async def process_one(
-                product,
-                _col=col,
-                _source=source,
-                _prefer_curl=prefer_curl,
-                _delay=request_delay,
-            ):
-                product_url = product.get("product_url") or product.get("link") or product.get("url") or ""
+            store_ok = 0
+            store_fail = 0
+            completed_counter = 0
+
+            async def process_item(p):
+                nonlocal store_ok, store_fail, updated_count, failed_count, completed_counter
+                product_name = p.get("name", "Sản phẩm")
+                product_url = p.get("product_url") or p.get("link") or p.get("url") or ""
+
                 if not product_url or product_url == "#":
-                    return 0
+                    completed_counter += 1
+                    store_fail += 1
+                    failed_count += 1
+                    return
 
                 async with sem:
-                    price_data = await scrape_platform_price(
-                        session, _source, product_url, prefer_curl=_prefer_curl
-                    )
-                    # Delay between requests to avoid rate limiting (inside semaphore
-                    # so it serializes correctly for rate-limited platforms)
-                    await asyncio.sleep(random.uniform(*_delay))
+                    price_data = await scrape_platform_price(session, source, product_url, prefer_curl=prefer_curl)
+                    await asyncio.sleep(random.uniform(*request_delay))
 
+                completed_counter += 1
                 if price_data:
-                    await update_product_real_price(_col, product, price_data)
-                    return 1
-                return 0
-
-            results = await asyncio.gather(
-                *(process_one(p) for p in products),
-                return_exceptions=True,
-            )
-            for r in results:
-                if isinstance(r, Exception):
-                    logger.error(f"[Scraper] Unexpected error on {source}: {r}")
-                    failed_count += 1
+                    await update_product_real_price(col, p, price_data)
+                    store_ok += 1
+                    updated_count += 1
+                    print(f"  [{completed_counter}/{total_store}] ✅ {product_name[:40]}: {price_data['price']}", flush=True)
                 else:
-                    updated_count += r
+                    store_fail += 1
+                    failed_count += 1
+                    print(f"  [{completed_counter}/{total_store}] ⚠️ {product_name[:40]}: Không trích xuất được giá", flush=True)
 
-    logger.info(
-        f"[Scraper] Done at {now.isoformat()}. "
-        f"Updated: {updated_count}, Failed: {failed_count}"
-    )
+            # Chạy tất cả sản phẩm song song
+            await asyncio.gather(*(process_item(p) for p in products), return_exceptions=True)
+
+            print(f"✔️ [{source}] Hoàn thành: {store_ok} thành công, {store_fail} thất bại.\n", flush=True)
+
+    print(f"🎉 TỔNG KẾT BÁO CÁO: Đã cập nhật thành công {updated_count} sản phẩm | Thất bại: {failed_count}", flush=True)
     return {"updated": updated_count, "failed": failed_count, "total": updated_count + failed_count}
-
-
-STORE_COLLECTIONS = {
-    "FPT Shop": "fpt",
-    "Thế Giới Di Động": "tgdd",
-    "CellphoneS": "cellphones",
-    "Hoàng Hà Mobile": "hoangha",
-    "Di Động Việt": "didongviet",
-    "Viettel Store": "viettelstore",
-    "Clickbuy": "clickbuy",
-    "MobileCity": "mobilecity",
-}
 
 
 async def get_db():
@@ -446,10 +392,10 @@ async def get_db():
 
 async def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Real price scraper for e-commerce platforms")
+    parser = argparse.ArgumentParser(description="Real price scraper for 8 e-commerce platforms to update LSTM price history")
     parser.add_argument("--limit", type=int, default=0, help="Max products per platform (0 = all)")
-    parser.add_argument("--mongo", default=None, help="MongoDB URI override")
-    parser.add_argument("--db", default=None, help="DB name override")
+    parser.add_argument("--concurrency", type=int, default=15, help="Số luồng song song cho các sàn thường (mặc định 15)")
+    parser.add_argument("--fpt-concurrency", type=int, default=5, help="Số luồng song song cho FPT Shop (mặc định 5)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -458,14 +404,10 @@ async def main():
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    if args.mongo:
-        os.environ["MONGO_URI"] = args.mongo
-    if args.db:
-        os.environ["MONGO_DB"] = args.db
-
     db = await get_db()
-    result = await update_prices_real(db, product_limit=args.limit)
-    print(json.dumps(result, ensure_ascii=False))
+    print(f"🚀 Bắt đầu quét và cập nhật giá thực tế cho các sản phẩm trong DB...")
+    result = await update_prices_real(db, product_limit=args.limit, concurrency=args.concurrency, fpt_concurrency=args.fpt_concurrency)
+    print(f"✅ Hoàn thành! Kết quả: {result}")
 
 
 if __name__ == "__main__":
