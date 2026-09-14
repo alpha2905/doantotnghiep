@@ -1,5 +1,7 @@
 # Smart Shopping Assistant - Backend API
 
+> Quick setup & run guide (Backend + Web + Mobile): see [HUONG_DAN_CAI_DAT.md](./HUONG_DAN_CAI_DAT.md)
+
 ## Tổng quan
 
 Hệ thống Smart Shopping Assistant tích hợp phân tích cảm xúc và dự báo xu hướng giá sản phẩm. Backend được xây dựng bằng FastAPI, kết nối MongoDB Atlas, và tích hợp các mô hình AI:
