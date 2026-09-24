@@ -54,6 +54,34 @@ backend/
 pip install -r requirements.txt
 ```
 
+## Tải Models (PhoBERT ~66GB)
+
+Models PhoBERT (`backend/model/`) không thể đẩy lên GitHub do giới hạn dung lượng.
+
+### Bước 1: Tải models
+
+```bash
+# Tải models từ link cung cấp (Google Drive / HuggingFace / direct URL)
+python setup_models.py --url "https://your-hosting-link/models_phobert.tar.gz"
+```
+
+Script sẽ tự động:
+- Tải archive về thư mục gốc
+- Giải nén vào `backend/model/`
+- Kiểm tra các file bắt buộc (`final_model/config.json`, `label_mapping.json`)
+
+### Bước 2: Xác minh
+
+```bash
+python setup_models.py
+# Nếu thấy [OK] cho tất cả file, models đã sẵn sàng
+```
+
+### Lưu ý
+
+- `backend/models/` (LSTM + scaler, ~0.1MB) **đã có trong repo**, không cần tải thêm.
+- Nếu không có models, backend vẫn chạy nhưng các endpoint AI sẽ trả về lỗi hoặc kết quả rỗng.
+
 ## Chạy Backend
 
 ```bash
