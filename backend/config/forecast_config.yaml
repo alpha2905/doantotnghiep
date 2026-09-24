@@ -1,0 +1,41 @@
+# ============================================================
+# Cấu hình Hybrid Forecast Engine (LSTM + Baseline)
+# Dùng cho backend/forecaster.py
+# ============================================================
+forecast:
+  look_back:
+    value: 5
+    rationale: "Cửa sổ trượt 5 mốc giá (LOOK_BACK=5) theo kiến trúc LSTM 2 lớp đã huấn luyện. Kết quả thực nghiệm LSTM với LOOK_BACK=5 cho MAPE tốt nhất trong các cửa sổ 5/7/14/30 (lstm_temporal_results.json)."
+  min_points_for_lstm:
+    value: 5
+    rationale: "Cần tối thiểu 5 mốc giá lịch sử để tạo được 1 cửa sổ đầu vào cho LSTM. Dưới ngưỡng này hệ thống trả về baseline (giá hôm qua) và đánh dấu insufficient_history."
+  min_backtest_samples:
+    value: 2
+    rationale: "Cần tối thiểu 2 mẫu rolling-origin backtest để việc so sánh phương pháp có ý nghĩa thống kê tối thiểu. Dưới ngưỡng này chỉ dùng luật theo đặc trưng chuỗi (profile-based rule)."
+  band_z:
+    value: 1.28
+    rationale: "Hệ số z cho dải tin cậy 80% (±1.28σ) tính từ độ lệch chuẩn phần dư (residual std) của phương pháp được chọn trong rolling backtest."
+  flat_ratio_threshold:
+    value: 0.6
+    rationale: "Nếu >= 60% số ngày liên tiếp giá KHÔNG đổi thì chuỗi được coi là phẳng - baseline (naive) đủ tốt, LSTM chỉ thêm nhiễu (đây chính là lý do LSTM thua naive trên chuỗi giá TMĐT Việt Nam)."
+  cv_threshold:
+    value: 0.01
+    rationale: "Hệ số biến thiên (std/mean) < 1% là mức dao động nhiễu của giá niêm yết. Khi đó baseline được ưu tiên."
+  blend_deviation_threshold:
+    value: 0.25
+    rationale: "Nếu LSTM lệch baseline quá 25% thì coi là bất thường (do scaler dùng chung cho mọi thang giá) và chuyển sang Hybrid blend 50/50 để giảm rủi ro outlier."
+  blend_weight_lstm:
+    value: 0.5
+    rationale: "Trọng số LSTM trong công thức Hybrid khi phát hiện lệch lớn: forecast = 0.5*LSTM + 0.5*baseline."
+  chart_max_days:
+    value: 30
+    rationale: "Số ngày tối đa hiển thị trên biểu đồ lịch sử giá (UI cho phép chọn 7/14/30 ngày)."
+  default_chart_days:
+    value: 7
+    rationale: "Cửa sổ mặc định của biểu đồ giống hành vi cũ của /api/compare để không thay đổi trải nghiệm người dùng."
+
+note: >
+  Hybrid Forecast Engine chọn phương pháp dự báo theo rolling-origin backtest trên
+  chính chuỗi giá của từng sản phẩm (không dùng tập test cố định) để đảm bảo tính nhân quả:
+  mỗi phương pháp chỉ được chọn dựa trên dữ liệu quá khứ. Cấu hình này là heuristic của
+  prototype, cần tinh chỉnh khi có thêm dữ liệu giá dài hạn hơn.

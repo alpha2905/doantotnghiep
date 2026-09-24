@@ -12,11 +12,7 @@ __pycache__/
 *.py[cod]
 
 # Model weights (KHỔNG LỒ, không đưa vào Docker context)
-backend/model/
 backend/models/
-backend_new/model/
-backend_new/models/
-model/phobert_models/
 backend/phobert_models/
 *.safetensors
 *.pth
@@ -41,7 +37,6 @@ mobile/android/.idea/
 data/
 backend/data/
 backend/results/
-backend/model/results/
 *.log
 logs/
 

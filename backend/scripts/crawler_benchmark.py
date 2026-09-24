@@ -57,7 +57,7 @@ SOURCES = {
 }
 
 FETCH_TIMEOUT = int(os.environ.get("HTML_FETCH_TIMEOUT", "25"))
-RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "model", "results")
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "results")
 
 
 def get_product_url(p: dict) -> str:

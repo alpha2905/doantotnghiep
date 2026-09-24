@@ -16,3 +16,7 @@ async def price_updater_loop(interval_hours=3):
         except Exception as e:
             print(f"[PriceUpdater] Error: {e}")
         await asyncio.sleep(interval_hours * 3600)
+
+
+if __name__ == "__main__":
+    asyncio.run(update_prices_once())

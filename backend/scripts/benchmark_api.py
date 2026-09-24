@@ -60,7 +60,7 @@ def benchmark_load():
             all_results[f"{users}_workers"] = {"error": str(e)}
 
     # Lưu kết quả
-    output_path = os.path.join(os.path.dirname(__file__), "model", "results", "api_benchmark_results.json")
+    output_path = os.path.join(os.path.dirname(__file__), os.pardir, "results", "api_benchmark_results.json")
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump({

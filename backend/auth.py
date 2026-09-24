@@ -1,15 +1,26 @@
 import os
 import jwt
 import bcrypt
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from fastapi import Depends, HTTPException, Header, Request
 from pymongo import ASCENDING
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
 # --- CẤU HÌNH JWT ---
 SECRET_KEY = os.environ.get("JWT_SECRET", "an-nguyen-price-comparison-secret-key-2026")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 ngày
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+def is_valid_email(email: str) -> bool:
+    if not email or not isinstance(email, str):
+        return False
+    return bool(EMAIL_RE.match(email.strip()))
 
 # --- PASSWORD HASHING ---
 def hash_password(password: str) -> str:
@@ -44,7 +55,9 @@ def decode_token(token: str) -> dict:
 # --- USER MODEL ---
 async def get_user_by_email(db, email: str):
     """Tìm user theo email."""
-    return await db.users.find_one({"email": email.lower().strip()})
+    if not email:
+        return None
+    return await db.users.find_one({"email": normalize_email(email)})
 
 async def get_user_by_id(db, user_id: str):
     """Tìm user theo _id."""
@@ -56,11 +69,18 @@ async def get_user_by_id(db, user_id: str):
 
 async def create_user(db, email: str, password: str, full_name: str = ""):
     """Tạo user mới."""
+    if not is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Email không hợp lệ")
+    if not password or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Mật khẩu phải có ít nhất 6 ký tự")
+    
+    normalized_email = normalize_email(email)
     user = {
-        "email": email.lower().strip(),
+        "email": normalized_email,
         "password_hash": hash_password(password),
         "full_name": full_name.strip(),
-        "favorites": [],  # Danh sách sản phẩm yêu thích
+        "username": normalized_email,
+        "favorites": [],
         "created_at": datetime.now(timezone.utc),
     }
     result = await db.users.insert_one(user)
@@ -72,6 +92,7 @@ def user_to_public(user) -> dict:
     return {
         "id": str(user["_id"]),
         "email": user.get("email", ""),
+        "username": user.get("username", ""),
         "full_name": user.get("full_name", ""),
         "favorites": user.get("favorites", []),
         "created_at": user.get("created_at").isoformat() if user.get("created_at") else None,

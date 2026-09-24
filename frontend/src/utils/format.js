@@ -49,17 +49,22 @@ export function fillMissingDates(labels, data) {
 
   let startDate, endDate
   try {
-    const firstParts = labels[0].split('/')
-    const lastParts = labels[labels.length - 1].split('/')
-    startDate = new Date(2026, parseInt(firstParts[1]) - 1, parseInt(firstParts[0]))
-    endDate = new Date(2026, parseInt(lastParts[1]) - 1, parseInt(lastParts[0]))
+    const dateLabels = labels.filter(l => /^\d{2}\/\d{2}$/.test(l))
+    if (dateLabels.length === 0) return { labels, data }
+    const firstParts = dateLabels[0].split('/')
+    const lastParts = dateLabels[dateLabels.length - 1].split('/')
+    const currentYear = new Date().getFullYear()
+    startDate = new Date(currentYear, parseInt(firstParts[1]) - 1, parseInt(firstParts[0]))
+    endDate = new Date(currentYear, parseInt(lastParts[1]) - 1, parseInt(lastParts[0]))
   } catch (e) {
     return { labels, data }
   }
 
   const priceMap = {}
   labels.forEach((label, idx) => {
-    priceMap[label] = data[idx] || data[data.length - 1]
+    if (/^\d{2}\/\d{2}$/.test(label)) {
+      priceMap[label] = data[idx] || data[data.length - 1]
+    }
   })
 
   const currentDate = new Date(startDate)

@@ -53,14 +53,15 @@ def direction_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_true = np.asarray(y_true, dtype=float)
     y_pred = np.asarray(y_pred, dtype=float)
     if len(y_true) < 2:
-        return 0.0
+        return 1.0
     true_diff = np.diff(y_true)
     pred_diff = np.diff(y_pred)
     true_dir = np.sign(true_diff)
     pred_dir = np.sign(pred_diff)
     mask = true_dir != 0
     if not np.any(mask):
-        return 0.0
+        # Giá lịch sử đi ngang -> nếu dự báo cũng đi ngang (pred_dir == 0), đúng 100%
+        return float(np.mean(true_dir == pred_dir))
     return float(np.mean(true_dir[mask] == pred_dir[mask]))
 
 

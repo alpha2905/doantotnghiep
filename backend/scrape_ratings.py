@@ -360,10 +360,29 @@ def extract_rating_hoangha(html: str) -> Optional[float]:
 
 
 def extract_rating_clickbuy(html: str) -> Optional[float]:
-    """Clickbuy - check for "0/5" pattern"""
+    """Clickbuy - check for .rating-star input.rank value first, then fallback to regex"""
     soup = BeautifulSoup(html, 'html.parser')
     
-    # Look for "0/5" or similar patterns
+    # Try specific Clickbuy selectors first
+    selectors = [
+        '.rating-star input.rank',
+        '.rating-star input[type="hidden"]',
+        'input.rank',
+    ]
+    
+    for sel in selectors:
+        elements = soup.select(sel)
+        for el in elements:
+            val = el.get('value')
+            if val is not None:
+                try:
+                    rating = float(val)
+                    if 0 <= rating <= 5:
+                        return rating
+                except (ValueError, TypeError):
+                    continue
+    
+    # Fallback to regex patterns
     patterns = [
         r'(\d+(?:[.,]\d+)?)\s*/\s*5',
         r'(\d+(?:[.,]\d+)?)\s*sa',
@@ -394,13 +413,8 @@ def extract_rating_clickbuy(html: str) -> Optional[float]:
                 except:
                     pass
     
-    # Try specific selectors
-    selectors = [
-        '.rating', '.star', '.score', '.rate', '.points',
-        '[class*="rating"]', '[class*="star"]', '[itemprop="ratingValue"]'
-    ]
-    
-    for sel in selectors:
+    # Try other selectors
+    for sel in ['.rating', '.star', '.score', '.rate', '.points', '[class*="rating"]', '[class*="star"]', '[itemprop="ratingValue"]']:
         elements = soup.select(sel)
         for el in elements:
             text = el.get_text(strip=True)

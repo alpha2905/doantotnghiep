@@ -18,6 +18,8 @@ if hasattr(sys.stdout, 'reconfigure'):
 from pymongo import MongoClient
 from motor.motor_asyncio import AsyncIOMotorClient
 
+import comment_analyzer
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -29,11 +31,19 @@ logger = logging.getLogger(__name__)
 class CommentAnalysisWorker:
     """Worker phân tích bình luận offline và lưu kết quả vào MongoDB."""
     
-    def __init__(self, mongo_uri: str, db_name: str = "price_tracker"):
+    def __init__(self, mongo_uri: str, db_name: str = "price_tracker", load_phobert: bool = True):
         self.mongo_uri = mongo_uri
         self.db_name = db_name
         self.client = None
         self.db = None
+        self.tokenizer = None
+        self.model_sent = None
+        self.model_aspect = None
+        if load_phobert:
+            comment_analyzer.load_label_maps()
+            tok, ms, ma = comment_analyzer.load_models()
+            self.tokenizer, self.model_sent, self.model_aspect = tok, ms, ma
+            logger.info("✅ Nạp PhoBERT sentiment/aspect models cho Worker thành công")
     
     async def connect(self):
         """Kết nối MongoDB."""
@@ -166,29 +176,13 @@ class CommentAnalysisWorker:
         return mapping.get(platform, platform.lower().replace(' ', '_'))
     
     def _analyze_comments_batch(self, comments: List[Dict]) -> Dict[str, Any]:
-        """Phân tích batch bình luận (placeholder - cần tích hợp PhoBERT)."""
-        # TODO: Tích hợp PhoBERT inference thực tế
-        # Hiện tại trả về kết quả mẫu
-        total = len(comments)
-        positive = sum(1 for c in comments if c.get('label', '').lower() == 'positive')
-        neutral = sum(1 for c in comments if c.get('label', '').lower() == 'neutral')
-        negative = sum(1 for c in comments if c.get('label', '').lower() == 'negative')
-        
-        return {
-            "total": total,
-            "positive": positive,
-            "neutral": neutral,
-            "negative": negative,
-            "positive_rate": positive / total if total > 0 else 0,
-            "list": [
-                {
-                    "text": c.get('text', ''),
-                    "label": c.get('label', 'NEUTRAL'),
-                    "rqs": 3.0  # Placeholder
-                }
-                for c in comments[:12]  # Giới hạn 12 bình luận như yêu cầu
-            ]
-        }
+        """Phân tích batch bình luận dùng PhoBERT + rule-based hybrid engine (đồng bộ với API)."""
+        return comment_analyzer.analyze_comments(
+            comments,
+            tokenizer=self.tokenizer,
+            model_sent=self.model_sent,
+            model_aspect=self.model_aspect
+        )
 
 
 async def main():

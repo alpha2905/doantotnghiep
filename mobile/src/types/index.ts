@@ -22,6 +22,12 @@ export interface Product {
   name: string;
   current_price: number;
   forecast: number;
+  insufficient_history?: boolean;
+  forecast_method?: string;
+  forecast_method_name?: string;
+  forecast_method_reason?: string;
+  models_compared?: ModelComparison[];
+  pqs_breakdown?: PqsBreakdown;
   last_crawl_date: string;
   image: string;
   sentiment: SentimentData;
@@ -33,6 +39,25 @@ export interface Product {
   price_trend: PriceTrend;
   buy_recommendation: BuyRecommendation;
   lstm_metrics: LstmMetrics | null;
+}
+
+export interface ModelComparison {
+  key: string;
+  name: string;
+  mape: number | null;
+  mae: number | null;
+  direction_accuracy: number | null;
+  selected: boolean;
+}
+
+export interface PqsBreakdown {
+  total: number;
+  subscores?: {
+    s_price: number;
+    s_rating: number;
+    s_sentiment: number;
+    s_sold: number;
+  };
 }
 
 export interface SentimentData {

@@ -18,25 +18,35 @@ backend/
 ├── main.py                      # FastAPI app chính
 ├── config/
 │   └── pqs_weights.yaml         # Trọng số PQS và cơ sở heuristic
-├── model/
+├── scripts/
 │   ├── train_phobert.py         # Huấn luyện PhoBERT Sentiment + Aspect
 │   ├── train_lstm.py            # Huấn luyện LSTM dự báo giá
+│   ├── train_phobert_from_labeled.py  # Train PhoBERT từ JSONL labeled
 │   ├── evaluate_phobert_hybrid.py   # Đánh giá Sentiment: Rule vs PhoBERT vs Hybrid
 │   ├── evaluate_aspect_model.py     # Đánh giá Aspect Classification
 │   ├── evaluate_lstm_temporal.py    # Đánh giá LSTM với temporal split
 │   ├── evaluate_entity_resolution.py # Đánh giá Entity Resolution
 │   ├── evaluate_pqs_rqs_recommendation.py  # Unit test PQS/RQS
 │   ├── experiment_runner.py     # Chạy thống nhất tất cả thí nghiệm
-│   ├── phobert_models/          # Pre-trained PhoBERT models
-│   └── results/                 # Kết quả đánh giá JSON
-├── metrics.py                   # Standardized metrics: MAE, RMSE, MAPE, sMAPE, Direction Accuracy
-├── background_workers.py        # Background task phân tích bình luận
-├── load_test.py                 # API load test thực (P95, P99, throughput)
-├── scrape_comments.py           # Crawl bình luận từ 8 sàn TMĐT
-├── scrape_ratings.py            # Crawl rating/sao đánh giá
-├── models/                      # LSTM model + scaler
-└── serviceAccountKey.json       # Firebase credentials
+│   └── ...
+├── model/
+│   └── phobert_models/           # PhoBERT model output
+│       ├── sentiment_classification/
+│       └── aspect_classification/
+├── models/                       # LSTM model + scaler
+├── data/                         # Dữ liệu train/eval
+├── scrapers.py                   # Scraper helpers
+├── scrape_comments.py            # Crawl bình luận từ 8 sàn TMĐT
+├── scrape_ratings.py             # Crawl rating/sao đánh giá
+├── metrics.py                    # Standardized metrics: MAE, RMSE, MAPE, sMAPE, Direction Accuracy
+├── background_workers.py         # Background task phân tích bình luận
+├── load_test.py                  # API load test thực (P95, P99, throughput)
+├── config/
+│   └── pqs_weights.yaml
+└── serviceAccountKey.json         # Firebase credentials
 ```
+
+> **Lưu ý cho bản nộp nhẹ:** Nếu bạn dùng file nén nhẹ (`ecommerce-price-comparison-light.zip`), các thư mục `backend/model/phobert_models/` và file `backend/models/general_scaler.pkl` có thể **không có** trong gói nộp. Xem mục **"Bản nộp nhẹ – Khởi động lại model"** ở cuối README này.
 
 ## Cài đặt
 
@@ -57,7 +67,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ### 1. Đánh giá PhoBERT Sentiment + Hybrid Engine
 
 ```bash
-python backend/model/evaluate_phobert_hybrid.py
+python backend/scripts/evaluate_phobert_hybrid.py
 ```
 
 Kết quả:
@@ -221,6 +231,34 @@ pqs_weights:
 | 13 | Thống nhất crawler frequency | ⏳ Cần cập nhật config |
 | 14 | API Load Test thực tế | ✅ Đã tạo load_test.py |
 | 15 | Mobile App status | ✅ Đã ghi rõ là prototype |
+
+## Bản nộp nhẹ – Khởi động lại model (light submission zip)
+
+File `ecommerce-price-comparison-light.zip` loại bỏ các file/thư mục nặng:
+- `backend/model/phobert_models/` (~515MB/model × 2 task)
+- `backend/models/general_scaler.pkl`
+- `venv/`, `node_modules/`, `data/`, `.git/`, `__pycache__/`, `android/.gradle/`, `android/build/`, `frontend/dist/`, `mobile/.expo/`, các file `.log`
+
+Source code và script train vẫn đủ để khởi động lại hệ thống:
+
+```bash
+# 1. Tạo venv + cài dependencies
+cd backend
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+
+# 2. Train PhoBERT sentiment + aspect (~15 epochs, có GPU sẽ nhanh hơn)
+python backend/scripts/train_phobert_from_labeled.py --epochs 15 --use-db-labeled
+
+# 3. Train LSTM (~60 epochs nếu model mới; script tự động tạo cả .pth và .pkl scaler)
+python backend/scripts/train_lstm.py
+
+# 4. Chạy backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Sau khi chạy lại model, toàn bộ API (`/api/compare`, `/api/search`, notification engine, v.v.) sẽ hoạt động bình thường. Nếu không train lại, các endpoint AI sẽ trả về lỗi hoặc kết quả rỗng.
 
 ## Lưu ý quan trọng
 

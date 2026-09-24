@@ -18,7 +18,7 @@ Dự án gồm **4 thành phần**: **Backend API (FastAPI)**, **Frontend Web (R
 | Firebase | *(tùy chọn)* cho push notification / hosting |
 | Git | để clone repo |
 
-> ⚠️ **Lưu ý dung lượng model:** Backend cần các file mô hình AI để chạy đầy đủ chức năng dự báo giá (LSTM) và phân tích cảm xúc (PhoBERT). Các file này **không được commit vào Git** (xem mục 2 và mục 11).
+> ⚠️ **Lưu ý dung lượng model:** Backend cần các file mô hình AI để chạy đầy đủ chức năng dự báo giá (LSTM) và phân tích cảm xúc (PhoBERT). Các file này **không được commit vào Git** (xem mục 2 và mục 11). Nếu bạn dùng bản nén nhẹ để nộp bài, xem mục **2.1 Bản nộp nhẹ** để biết cách khởi động lại các model.
 
 ---
 
@@ -44,6 +44,31 @@ ecommerce-price-comparison/
 ├── DEPLOY.md                    # Hướng dẫn deploy chi tiết (Render / Firebase / EAS)
 └── start.bat                    # Script khởi động nhanh trên Windows
 ```
+
+### 2.1 Bản nộp nhẹ (submission light zip)
+
+File `ecommerce-price-comparison-light.zip` đã loại bỏ các gói/thư mục nặng để phù hợp giới hạn nộp bài:
+- **Không có:** `venv/`, `node_modules/`, `.git/`, `backend/model/phobert_models/`, `backend/models/general_scaler.pkl`, `data/`, `__pycache__/`, `android/.gradle/`, `android/build/`, `frontend/dist/`, `mobile/.expo/`, các file `.log`
+
+**Để chạy backend đầy đủ từ bản nén nhẹ, bạn cần khởi động lại 2 model AI:**
+
+1. **Retrain PhoBERT** (sentiment + aspect):
+    ```bash
+    python backend/scripts/train_phobert_from_labeled.py --epochs 15 --use-db-labeled
+    ```
+    Kết quả sẽ tạo ra:
+    - `backend/model/phobert_models/sentiment_classification/final_model/`
+    - `backend/model/phobert_models/aspect_classification/final_model/`
+
+2. **Retrain LSTM** (để tạo cả `.pth` và `.pkl` scaler):
+    ```bash
+    python backend/scripts/train_lstm.py
+    ```
+    Kết quả sẽ ghi đè lên:
+    - `backend/models/general_lstm_best.pth`
+    - `backend/models/general_scaler.pkl`
+
+Nếu bạn không cần chạy AI inference và chỉ muốn xem cấu trúc code/UI, có thể comment các lệnh load model trong `backend/main.py` (tuần tự dòng 106–172) và gán fallback cố định. Tuy nhiên, các endpoint `/api/compare`, `/api/search` sẽ bị ảnh hưởng vì thiếu dự báo giá và phân tích cảm xúc.
 
 ---
 
@@ -252,6 +277,7 @@ Chi tiết đầy đủ xem file **[DEPLOY.md](./DEPLOY.md)** và **[render.yaml
 | Frontend gọi API bị lỗi CORS | Set `FRONTEND_ORIGINS` đúng URL frontend rồi restart backend. |
 | Mobile không gọi được backend | Sai `EXPO_PUBLIC_API_URL` hoặc `extra.apiUrl`; thiết bị phải cùng mạng / đúng cổng. |
 | `eas build` lỗi | `eas.json` chứa `projectId` placeholder; chạy `npx eas init` để cấu hình project thật. |
+| **Dùng bản nén nhẹ mà backend báo `FileNotFoundError` PhoBERT / LSTM scaler** | File `phobert_models/` và `general_scaler.pkl` bị loại bỏ khỏi zip. Chạy `python backend/scripts/train_phobert_from_labeled.py --epochs 15 --use-db-labeled` và `python backend/scripts/train_lstm.py` để tạo lại model trước khi start API. |
 
 ---
 

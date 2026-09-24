@@ -109,119 +109,213 @@ async def fetch_page(session: aiohttp.ClientSession, url: str, timeout: int = 15
 # ---------------------------------------------------------------------------
 
 def extract_comments_tgdd(html: str) -> List[str]:
-    """Thế Giới Di Động - comments thường nằm trong .comment-list hoặc div chứa 'Bình luận'"""
+    """Thế Giới Di Động - comments trong .comment-list li.par"""
     soup = BeautifulSoup(html, "html.parser")
     comments = []
     
-    # Selectors phổ biến cho TGDD
-    selectors = [
-        ".comment-list .comment-content",
-        ".comment-list .content",
-        ".comment-item .comment-text",
-        ".comment-item .content",
-        "[class*='comment'] [class*='content']",
-        "[class*='comment'] p",
-        ".review-content",
-        ".review-text",
-    ]
+    # User comments: .comment-list li .cmt-content .cmt-txt
+    for tag in soup.select(".comment-list li .cmt-content .cmt-txt"):
+        text = tag.get_text(strip=True)
+        if text and 5 <= len(text) <= 1000:
+            comments.append(text)
     
-    for sel in selectors:
-        for tag in soup.select(sel):
-            text = tag.get_text(strip=True)
-            if text and len(text) > 5:
-                comments.append(text)
+    # Support/admin notes: .comment-list li .support
+    for tag in soup.select(".comment-list li .support"):
+        text = tag.get_text(strip=True)
+        if text and 5 <= len(text) <= 1000:
+            comments.append(text)
     
-    # Fallback: tìm đoạn văn bản có vẻ là comment
+    # Fallback: generic selectors
     if not comments:
-        for p in soup.find_all("p"):
-            text = p.get_text(strip=True)
-            if 20 <= len(text) <= 500 and any(kw in text.lower() for kw in ["máy", "dùng", "tốt", "xấu", "pin", "mua", "hài lòng", "thất vọng"]):
-                comments.append(text)
+        for sel in [".comment-list .content", ".review-list .content", "[class*='comment'] [class*='text']"]:
+            for tag in soup.select(sel):
+                text = tag.get_text(strip=True)
+                if text and 10 <= len(text) <= 1000:
+                    comments.append(text)
     
-    return comments[:20]  # Giới hạn 20 comment mỗi sản phẩm
+    return comments[:20]
 
 
 def extract_comments_fpt(html: str) -> List[str]:
-    """FPT Shop - comments trong .review-list, .comment-list"""
+    """FPT Shop - comments trong .flex.flex-col"""
     soup = BeautifulSoup(html, "html.parser")
     comments = []
     
-    selectors = [
-        ".review-list .review-content",
-        ".review-list .content",
-        ".comment-list .comment-text",
-        ".comment-item .content",
-        "[class*='review'] [class*='content']",
-        "[class*='comment'] [class*='text']",
-    ]
+    # Lấy tất cả comment rows
+    comment_rows = soup.select(".flex.flex-col .flex.gap-2")
+    if not comment_rows:
+        comment_rows = soup.select("[class*='flex'][class*='flex-col'] [class*='flex'][class*='gap-2']")
     
-    for sel in selectors:
-        for tag in soup.select(sel):
-            text = tag.get_text(strip=True)
-            if text and len(text) > 5:
+    for row in comment_rows:
+        # Comment text trong .text-textOnWhitePrimary.b2-regular
+        text_div = row.select_one(".text-textOnWhitePrimary.b2-regular .break-word")
+        if not text_div:
+            text_div = row.select_one("[class*='b2-regular'] [class*='break-word']")
+        if not text_div:
+            text_div = row.select_one("[class*='b2-medium']")
+        
+        if text_div:
+            text = text_div.get_text(strip=True)
+            if text and 5 <= len(text) <= 1000:
                 comments.append(text)
     
+    # Fallback: generic selectors
     if not comments:
-        for p in soup.find_all("p"):
-            text = p.get_text(strip=True)
-            if 20 <= len(text) <= 500 and any(kw in text.lower() for kw in ["máy", "dùng", "tốt", "xấu", "pin", "mua"]):
-                comments.append(text)
+        for sel in [".comment-list .content", ".review-list .content", "[class*='comment'] [class*='text']"]:
+            for tag in soup.select(sel):
+                text = tag.get_text(strip=True)
+                if text and 10 <= len(text) <= 500:
+                    comments.append(text)
     
     return comments[:20]
 
 
 def extract_comments_cellphones(html: str) -> List[str]:
-    """CellphoneS"""
+    """CellphoneS - comments trong .item-comment__box-question .content"""
     soup = BeautifulSoup(html, "html.parser")
     comments = []
     
+    # Lấy tất cả .content trong box-question (user comments) và box-rep-comment (admin replies)
     selectors = [
-        ".comment-list .comment-content",
+        ".item-comment__box-question .content",
+        ".item-comment__box-rep-comment .box-cmt__box-question .content",
         ".comment-list .content",
-        ".review-item .review-text",
         "[class*='comment'] [class*='content']",
-        "[class*='review'] p",
     ]
     
     for sel in selectors:
         for tag in soup.select(sel):
             text = tag.get_text(strip=True)
             if text and len(text) > 5:
-                comments.append(text)
-    
-    if not comments:
-        for p in soup.find_all("p"):
-            text = p.get_text(strip=True)
-            if 20 <= len(text) <= 500 and any(kw in text.lower() for kw in ["máy", "dùng", "tốt", "xấu", "pin"]):
                 comments.append(text)
     
     return comments[:20]
 
 
 def extract_comments_hoangha(html: str) -> List[str]:
-    """Hoàng Hà Mobile"""
+    """Hoàng Hà Mobile - comments trong .comment-block"""
     soup = BeautifulSoup(html, "html.parser")
     comments = []
     
-    selectors = [
-        ".comment-list .comment-content",
-        ".comment-list .content",
-        ".review-content",
-        "[class*='comment'] [class*='content']",
-        "[class*='review'] p",
-    ]
+    # User comments: .comment-block .comment-text
+    for tag in soup.select(".comment-block .comment-text"):
+        text = tag.get_text(strip=True)
+        if text and len(text) > 5:
+            comments.append(text)
     
-    for sel in selectors:
-        for tag in soup.select(sel):
-            text = tag.get_text(strip=True)
-            if text and len(text) > 5:
-                comments.append(text)
+    # Admin replies: .comment-block .reply-box .reply-text
+    for tag in soup.select(".comment-block .reply-box .reply-text"):
+        text = tag.get_text(strip=True)
+        if text and len(text) > 5:
+            comments.append(text)
     
+    # Fallback: generic selectors
     if not comments:
-        for p in soup.find_all("p"):
+        for sel in [".comment-list .content", ".review-list .content", "[class*='comment'] [class*='text']"]:
+            for tag in soup.select(sel):
+                text = tag.get_text(strip=True)
+                if text and 10 <= len(text) <= 1000:
+                    comments.append(text)
+    
+    return comments[:20]
+
+
+def extract_comments_didongviet(html: str) -> List[str]:
+    """Di Động Việt - comments trong .flex.flex-col.gap-4"""
+    soup = BeautifulSoup(html, "html.parser")
+    comments = []
+    
+    # Lấy tất cả comment blocks (user + admin reply)
+    comment_blocks = soup.select(".flex.flex-col.gap-4")
+    if not comment_blocks:
+        comment_blocks = soup.select("[class*='flex'][class*='flex-col'][class*='gap-4']")
+    
+    for block in comment_blocks:
+        # Lấy tất cả p có whitespace-pre-line (comment text)
+        for p in block.select("p.whitespace-pre-line"):
             text = p.get_text(strip=True)
-            if 20 <= len(text) <= 500 and any(kw in text.lower() for kw in ["máy", "dùng", "tốt", "xấu", "pin"]):
+            if text and 5 <= len(text) <= 1000:
                 comments.append(text)
+    
+    # Fallback: lấy theo cấu trúc flex gap-2 (comment row)
+    if not comments:
+        for row in soup.select(".flex.gap-2"):
+            p = row.select_one("p.whitespace-pre-line")
+            if p:
+                text = p.get_text(strip=True)
+                if text and 5 <= len(text) <= 1000:
+                    comments.append(text)
+    
+    return comments[:20]
+
+
+def extract_comments_mobilecity(html: str) -> List[str]:
+    """MobileCity - comments trong .comment-item .comment-content"""
+    soup = BeautifulSoup(html, "html.parser")
+    comments = []
+    
+    # User comments: .comment-item .comment-content
+    for tag in soup.select(".comment-item .comment-content"):
+        text = tag.get_text(strip=True)
+        if text and 5 <= len(text) <= 1000:
+            comments.append(text)
+    
+    # Admin replies: .comment-child-list .comment-child-item .comment-content
+    for tag in soup.select(".comment-child-list .comment-child-item .comment-content"):
+        text = tag.get_text(strip=True)
+        if text and 5 <= len(text) <= 1000:
+            comments.append(text)
+    
+    # Fallback: generic selectors
+    if not comments:
+        for sel in [".comment-list .content", ".review-list .content", "[class*='comment'] [class*='text']"]:
+            for tag in soup.select(sel):
+                text = tag.get_text(strip=True)
+                if text and 10 <= len(text) <= 1000:
+                    comments.append(text)
+    
+    return comments[:20]
+
+
+def extract_comments_clickbuy(html: str) -> List[str]:
+    """Clickbuy - comments trong .comments-list .item .item-content"""
+    soup = BeautifulSoup(html, "html.parser")
+    comments = []
+    
+    # Lấy tất cả .item-content, bao gồm cả admin reply trong .item-child
+    for tag in soup.select(".comments-list .item .item-content"):
+        text = tag.get_text(strip=True)
+        if text and 10 <= len(text) <= 1000:
+            comments.append(text)
+    
+    # Fallback nếu không tìm thấy
+    if not comments:
+        for tag in soup.select(".review-list .content, .comment-list .content"):
+            text = tag.get_text(strip=True)
+            if text and 10 <= len(text) <= 500:
+                comments.append(text)
+    
+    return comments[:20]
+
+
+def extract_comments_viettelstore(html: str) -> List[str]:
+    """Viettel Store - comments trong .cmt-item .c"""
+    soup = BeautifulSoup(html, "html.parser")
+    comments = []
+    
+    # User comments: .cmt-item .c
+    for tag in soup.select(".cmt-item .c"):
+        text = tag.get_text(strip=True)
+        if text and 5 <= len(text) <= 1000:
+            comments.append(text)
+    
+    # Fallback: generic selectors
+    if not comments:
+        for sel in [".comment-list .content", ".review-list .content", "[class*='comment'] [class*='text']"]:
+            for tag in soup.select(sel):
+                text = tag.get_text(strip=True)
+                if text and 10 <= len(text) <= 1000:
+                    comments.append(text)
     
     return comments[:20]
 
@@ -270,10 +364,10 @@ EXTRACTORS = {
     "FPT Shop": extract_comments_fpt,
     "CellphoneS": extract_comments_cellphones,
     "Hoàng Hà Mobile": extract_comments_hoangha,
-    "Di Động Việt": extract_comments_generic,
-    "Viettel Store": extract_comments_generic,
-    "Clickbuy": extract_comments_generic,
-    "MobileCity": extract_comments_generic,
+    "Di Động Việt": extract_comments_didongviet,
+    "Viettel Store": extract_comments_viettelstore,
+    "Clickbuy": extract_comments_clickbuy,
+    "MobileCity": extract_comments_mobilecity,
 }
 
 

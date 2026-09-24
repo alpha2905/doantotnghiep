@@ -2,11 +2,12 @@ import pickle
 import joblib
 import os
 
+backend_dir = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
 brands = ["iphone", "samsung", "oppo", "xiaomi"]
 
 for brand in brands:
-    old_path = f"backend/models/{brand}_scaler.pkl"
-    new_path = f"backend/models/{brand}_scaler_fixed.joblib"
+    old_path = os.path.join(backend_dir, "models", f"{brand}_scaler.pkl")
+    new_path = os.path.join(backend_dir, "models", f"{brand}_scaler_fixed.joblib")
     
     if os.path.exists(old_path):
         try:

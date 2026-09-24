@@ -236,6 +236,51 @@ def extract_price_robust(html: str, soup: BeautifulSoup) -> int:
     return 0
 
 
+def extract_image_from_didongviet(html: str, soup: BeautifulSoup) -> str:
+    """Trích xuất hình ảnh sản phẩm từ Di Động Việt."""
+    if not html or not soup:
+        return ""
+
+    selectors = [
+        'img.product-image',
+        'img.img-product',
+        'img.product-img',
+        '.product-gallery img',
+        '.product-images img',
+        '.product-image img',
+        'img[class*="product"]',
+        'img[class*="gallery"]',
+    ]
+    for sel in selectors:
+        tag = soup.select_one(sel)
+        if tag:
+            src = tag.get('src') or tag.get('data-src') or tag.get('data-lazy-src')
+            if src:
+                if src.startswith('//'):
+                    src = 'https://' + src[2:]
+                elif src.startswith('/'):
+                    src = 'https://didongviet.vn' + src
+                return src
+
+    og_image = soup.find('meta', property='og:image')
+    if og_image and og_image.get('content'):
+        return og_image['content']
+
+    for s in soup.find_all('script', type='application/ld+json'):
+        try:
+            data = json.loads(s.string or '')
+            if isinstance(data, dict):
+                img = data.get('image')
+                if isinstance(img, str):
+                    return img
+                elif isinstance(img, list) and img:
+                    return img[0]
+        except Exception:
+            continue
+
+    return ""
+
+
 async def scrape_platform_price(
     session: aiohttp.ClientSession,
     platform: str,
@@ -261,13 +306,20 @@ async def scrape_platform_price(
         logger.warning(f"[Scraper] No price found for {platform}: {product_url}")
         return None
 
+    image = ""
+    if platform == "Di Động Việt":
+        image = extract_image_from_didongviet(html, soup)
+
     now = datetime.now(timezone.utc)
-    return {
+    result = {
         "price": f"{price:,}₫",
         "price_number": price,
         "last_scraped_at": now,
         "source": "live_scraper",
     }
+    if image:
+        result["image"] = image
+    return result
 
 
 async def update_product_real_price(db_col, product: Dict[str, Any], price_data: Dict[str, Any]) -> bool:
@@ -302,6 +354,7 @@ async def update_product_real_price(db_col, product: Dict[str, Any], price_data:
                 "price_number": price_data["price_number"],
                 "last_scraped_at": now,
                 "price_history": price_history,
+                **({"image": price_data["image"]} if price_data.get("image") else {}),
             }
         }
     )

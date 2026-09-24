@@ -6,12 +6,12 @@ import {
 } from 'recharts'
 import { Search, TrendingUp, TrendingDown, Minus, ShoppingCart, Clock, AlertTriangle, CheckCircle2, Sparkles, Zap, ExternalLink, RefreshCw, Heart, LogIn, LogOut, Bell, User, X, Moon, Sun, ArrowUp, Scale, Check } from 'lucide-react'
 import {
-  PLATFORM_LOGOS, formatPrice, getRandomComments, fillMissingDates,
+  PLATFORM_LOGOS, formatPrice, getRandomComments,
   PQS_COLORS, REC_COLORS, SENTIMENT_CONFIG, getRqsColor
 } from './utils/format'
 import { requestFcmToken, onForegroundMessage } from './firebase'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const API_URL = import.meta.env.VITE_API_URL || ''
 
 const TREND_ICONS = {
   'Giảm mạnh': <TrendingDown size={14} />,
@@ -28,8 +28,6 @@ const REC_ICONS = {
   'Cân nhắc': <AlertTriangle size={18} />,
   'Không khuyến nghị': <AlertTriangle size={18} />
 }
-
-const POPULAR_SEARCHES = ['iPhone 15 Pro Max', 'Samsung Galaxy S24', 'Xiaomi 14', 'iPad', 'MacBook', 'AirPods', 'Tivi Sony', 'Loa Bluetooth']
 
 function getPqsColor(color) {
   return PQS_COLORS[color] || PQS_COLORS.green
@@ -52,6 +50,7 @@ function getSentimentConfig(label) {
 function ProductCard({ product, index, user, token, onToggleFavorite, onRequireLogin, isCheapest, onCompare }) {
   const [expandedComments, setExpandedComments] = useState({})
   const [showAllComments, setShowAllComments] = useState(false)
+  const [showModelsTable, setShowModelsTable] = useState(false)
   const isFavorite = user?.favorites?.some(f => f.name === product.name && f.platform === product.platform)
 
   const sentiment = product.sentiment || { pos: 0, neu: 0, neg: 0, list: [] }
@@ -62,11 +61,18 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
   const lstmMetrics = product.lstm_metrics
   const pqsLabel = product.pqs_label || { label: '', color: 'green' }
 
-  const filledChart = fillMissingDates(chart.labels, chart.data)
-  const chartData = filledChart.labels.map((label, i) => ({
+  const chartData = chart.labels.map((label, i) => ({
     name: label,
-    price: filledChart.data[i]
+    price: chart.data[i],
+    forecast: i === chart.labels.length - 1 ? chart.data[i] : null
   }))
+  if (chart.labels && chart.labels.length > 0 && product.forecast != null) {
+    chartData.push({
+      name: 'Dự báo',
+      price: null,
+      forecast: product.forecast
+    })
+  }
 
   const comments = getRandomComments(sentiment.list, showAllComments ? 20 : 10)
   const totalComments = sentiment.list.length
@@ -88,7 +94,13 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
       </div>
 
       {/* Image */}
-      <div className="product-image-wrap">
+      <a
+        href={product.link}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="product-image-wrap"
+        title={product.platform}
+      >
         {product.image ? (
           <img src={product.image} alt={product.name} className="product-image" onError={(e) => { e.target.style.display = 'none' }} />
         ) : (
@@ -108,6 +120,7 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
             <Zap size={12} /> Rẻ nhất
           </span>
         )}
+      </a>
 
         {/* Favorite button overlay */}
         <button
@@ -129,7 +142,6 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
             className={isFavorite ? 'heart-pop' : ''}
           />
         </button>
-      </div>
 
       {/* Name */}
       <h3 className="product-name" title={product.name}>{product.name}</h3>
@@ -160,6 +172,26 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
         <div className="pqs-status" style={{ color: getPqsColor(pqsLabel.color) }}>
           {pqsLabel.label}
         </div>
+        {product.pqs_breakdown?.subscores && (
+          <div className="pqs-breakdown-box">
+            <div className="pqs-sub-item">
+              <div className="pqs-sub-label">S_Price</div>
+              <div className="pqs-sub-val">{product.pqs_breakdown.subscores.s_price}</div>
+            </div>
+            <div className="pqs-sub-item">
+              <div className="pqs-sub-label">S_Rating</div>
+              <div className="pqs-sub-val">{product.pqs_breakdown.subscores.s_rating}</div>
+            </div>
+            <div className="pqs-sub-item">
+              <div className="pqs-sub-label">S_Sent</div>
+              <div className="pqs-sub-val">{product.pqs_breakdown.subscores.s_sentiment}</div>
+            </div>
+            <div className="pqs-sub-item">
+              <div className="pqs-sub-label">S_Sold</div>
+              <div className="pqs-sub-val">{product.pqs_breakdown.subscores.s_sold}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Buy Recommendation */}
@@ -210,7 +242,7 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
       {/* Forecast Chart */}
       <div className="forecast-section">
         <div className="forecast-header">
-          <span>🔮 Dự báo giá LSTM</span>
+          <span>🔮 Dự báo giá</span>
         </div>
         <div className="chart-container">
           <ResponsiveContainer width="100%" height="100%">
@@ -237,32 +269,39 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
                 strokeWidth={2.5}
                 dot={{ r: 3, fill: 'var(--primary)', strokeWidth: 0 }}
                 activeDot={{ r: 5 }}
+                connectNulls={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="forecast"
+                stroke="var(--purple-500)"
+                strokeWidth={2.5}
+                strokeDasharray="5 5"
+                dot={{ r: 6, fill: 'var(--purple-500)', strokeWidth: 2, stroke: '#fff' }}
+                activeDot={{ r: 8 }}
+                connectNulls={false}
               />
             </LineChart>
           </ResponsiveContainer>
         </div>
       </div>
 
-      {/* LSTM Metrics */}
-      {lstmMetrics && (
+      {/* Forecast Metrics */}
+      {lstmMetrics && lstmMetrics.mae != null && (
         <div className="lstm-metrics">
-          <div className="lstm-title">📈 Độ chính xác LSTM (Kiểm thử Lịch sử)</div>
-          <div className="lstm-grid">
+          <div className="lstm-title">📈 Độ chính xác dự báo (Kiểm thử lịch sử)</div>
+          <div className="lstm-grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
             <div className="lstm-item lstm-mae">
               <div className="lstm-item-label">MAE</div>
-              <div className="lstm-item-value">{((lstmMetrics.mae / (product.current_price || 1)) * 100).toFixed(2)}%</div>
+              <div className="lstm-item-value">{formatPrice(lstmMetrics.mae)}</div>
             </div>
             <div className="lstm-item lstm-rmse">
               <div className="lstm-item-label">RMSE</div>
-              <div className="lstm-item-value">{((lstmMetrics.rmse / (product.current_price || 1)) * 100).toFixed(2)}%</div>
+              <div className="lstm-item-value">{formatPrice(lstmMetrics.rmse)}</div>
             </div>
             <div className="lstm-item lstm-mape">
               <div className="lstm-item-label">MAPE</div>
               <div className="lstm-item-value">{lstmMetrics.mape}%</div>
-            </div>
-            <div className="lstm-item lstm-dir">
-              <div className="lstm-item-label">Đúng hướng</div>
-              <div className="lstm-item-value">{lstmMetrics.direction_accuracy}%</div>
             </div>
           </div>
         </div>
@@ -382,26 +421,9 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
           </div>
         )}
       </div>
-
-      {/* Actions */}
-      <div className="card-actions">
-        <a
-          href={product.link}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="search-btn"
-          style={{ textAlign: 'center', textDecoration: 'none', flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-        >
-          Xem trên {product.platform} <ExternalLink size={14} />
-        </a>
-        <button className="compare-btn" onClick={() => onCompare(product)} title="So sánh giá">
-          <Scale size={16} />
-        </button>
-      </div>
     </div>
   )
 }
-
 function EmptyProductCard({ platform }) {
   return (
     <div className="empty-product-card">
@@ -464,6 +486,8 @@ function AuthModal({ mode, onClose, onLogin, onRegister, onSwitchMode }) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
+            pattern="^[^@\s]+@[^@\s]+\.[^@\s]+$"
+            title="Vui lòng nhập đúng định dạng email (ví dụ: user@example.com)"
           />
           <input
             className="auth-input"
@@ -617,6 +641,8 @@ function App() {
   const [searched, setSearched] = useState(false)
   const [lastQuery, setLastQuery] = useState('')
   const [fallback, setFallback] = useState(null)
+  const [ragSuggestions, setRagSuggestions] = useState([])
+  const [ragLoading, setRagLoading] = useState(false)
   const [token, setToken] = useState(localStorage.getItem('token') || null)
   const [user, setUser] = useState(null)
   const [showAuthModal, setShowAuthModal] = useState(false)
@@ -630,10 +656,7 @@ function App() {
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('theme') === 'dark')
   const [scrolled, setScrolled] = useState(false)
   const [showScrollTop, setShowScrollTop] = useState(false)
-  const [showSuggestions, setShowSuggestions] = useState(false)
-  const [suggestions, setSuggestions] = useState([])
   const searchInputRef = useRef(null)
-  const suggestTimerRef = useRef(null)
 
   // Theme
   useEffect(() => {
@@ -671,7 +694,7 @@ function App() {
     setSearched(true)
     setLastQuery(q)
     setFallback(null)
-    setShowSuggestions(false)
+    setRagSuggestions([])
 
     try {
       const searchResponse = await axios.get(`${API_URL}/api/search`, {
@@ -679,17 +702,44 @@ function App() {
         timeout: 30000
       })
 
-      if (!searchResponse.data.found) {
-        setResults([])
-        setFallback(searchResponse.data)
-        return
-      }
-
       const response = await axios.get(`${API_URL}/api/compare`, {
-        params: { name: q },
-        timeout: 60000
+        params: { name: q, fast: true },
+        timeout: 30000
       })
-      setResults(response.data.results || [])
+      const results = response.data.results || []
+
+      if (results.length > 0) {
+        setResults(results)
+
+        axios.get(`${API_URL}/api/compare`, {
+          params: { name: q, fast: false },
+          timeout: 60000
+        }).then(fullResponse => {
+          setResults(fullResponse.data.results || [])
+        }).catch(err => {
+          console.error('Full AI load error:', err)
+        })
+      } else {
+        setResults([])
+        setFallback(searchResponse.data || {
+          message: `Không tìm thấy sản phẩm "${q}" trong hệ thống.`,
+          search_term: q
+        })
+
+        setRagLoading(true)
+        try {
+          const fallbackResponse = await axios.get(`${API_URL}/api/search/fallback`, {
+            params: { name: q, limit: 8 },
+            timeout: 30000
+          })
+          setRagSuggestions(fallbackResponse.data.suggestions || [])
+        } catch (fallbackErr) {
+          console.error('RAG fallback error:', fallbackErr)
+          setRagSuggestions([])
+        } finally {
+          setRagLoading(false)
+        }
+      }
     } catch (err) {
       console.error('Search error:', err)
       setError(err.response?.data?.detail || 'Không thể kết nối đến server. Vui lòng kiểm tra backend đang chạy.')
@@ -699,36 +749,51 @@ function App() {
     }
   }, [query])
 
-  const fetchSuggestions = useCallback(async (q) => {
-    if (!q || q.trim().length < 2) {
-      setSuggestions([])
-      return
-    }
-    try {
-      const res = await axios.get(`${API_URL}/api/suggest`, {
-        params: { name: q.trim(), limit: 8 },
-        timeout: 10000
-      })
-      setSuggestions(res.data.suggestions || [])
-    } catch (err) {
-      console.error('Suggest error:', err)
-      setSuggestions([])
-    }
-  }, [])
-
   const handleInputChange = (e) => {
     const val = e.target.value
     setQuery(val)
-    setShowSuggestions(true)
-    // Debounce 300ms để tránh gọi API quá nhiều
-    if (suggestTimerRef.current) clearTimeout(suggestTimerRef.current)
-    suggestTimerRef.current = setTimeout(() => {
-      fetchSuggestions(val)
-    }, 300)
   }
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') handleSearch()
+  }
+
+  const handleRagSuggestionClick = async (suggestionName) => {
+    const q = suggestionName.trim()
+    if (!q) return
+
+    setQuery(q)
+    setLastQuery(q)
+    setFallback(null)
+    setRagSuggestions([])
+    setLoading(true)
+    setError(null)
+    setSearched(true)
+
+    try {
+      const response = await axios.get(`${API_URL}/api/compare`, {
+        params: { name: q, fast: true },
+        timeout: 30000
+      })
+      setResults(response.data.results || [])
+
+      if (response.data.results && response.data.results.length > 0) {
+        axios.get(`${API_URL}/api/compare`, {
+          params: { name: q, fast: false },
+          timeout: 60000
+        }).then(fullResponse => {
+          setResults(fullResponse.data.results || [])
+        }).catch(err => {
+          console.error('Full AI load error:', err)
+        })
+      }
+    } catch (err) {
+      console.error('Search from RAG suggestion error:', err)
+      setError(err.response?.data?.detail || 'Không thể kết nối đến server.')
+      setResults([])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const handleLogin = async (email, password) => {
@@ -738,7 +803,11 @@ function App() {
       setToken(res.data.access_token)
       setUser(res.data.user)
       setShowAuthModal(false)
-      addToast('Đăng nhập thành công!')
+      if (res.data.new_user) {
+        addToast('Tài khoản chưa tồn tại. Hệ thống đã tạo tài khoản mới cho bạn! Chào mừng!')
+      } else {
+        addToast('Đăng nhập thành công!')
+      }
       return { ok: true }
     } catch (err) {
       return { ok: false, error: err.response?.data?.detail || 'Đăng nhập thất bại' }
@@ -900,9 +969,7 @@ function App() {
   useEffect(() => {
     searchInputRef.current?.focus()
   }, [])
-
   const platforms = ['FPT Shop', 'Thế Giới Di Động', 'CellphoneS', 'Hoàng Hà Mobile', 'Di Động Việt', 'Viettel Store', 'Clickbuy', 'MobileCity']
-  const foundPlatforms = results.map(r => r.platform)
 
   const cheapestPrice = results.length > 0 ? Math.min(...results.map(r => r.current_price)) : null
 
@@ -916,8 +983,6 @@ function App() {
       addToast('Hai sản phẩm phải khác sàn', 'error')
     }
   }
-
-  const filteredSuggestions = POPULAR_SEARCHES.filter(s => s.toLowerCase().includes(query.toLowerCase()))
 
   return (
     <div>
@@ -939,38 +1004,15 @@ function App() {
                 value={query}
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
-                onFocus={() => setShowSuggestions(true)}
-                onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
               />
-              {showSuggestions && query && suggestions.length > 0 && (
-                <div className="search-suggestions">
-                  {suggestions.map((s, i) => (
-                    <button key={i} className="suggestion-item" onClick={() => { setQuery(s.name); handleSearch(s.name) }}>
-                      <img
-                        src={s.image}
-                        alt=""
-                        className="sug-img"
-                        onError={(e) => { e.target.style.display = 'none' }}
-                      />
-                      <div className="sug-info">
-                        <div className="sug-name">{s.name}</div>
-                        <div className="sug-meta">
-                          <span className="sug-platform">{s.platform}</span>
-                          {s.price > 0 && <span className="sug-price">{formatPrice(s.price)}</span>}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <button className="search-btn" onClick={() => handleSearch()} disabled={loading}>
+              <button className="search-btn" onClick={() => handleSearch()} disabled={loading}>
               {loading ? <RefreshCw size={16} className="animate-spin" /> : <Search size={16} />}
               {loading ? 'Đang tìm...' : 'Tìm kiếm'}
             </button>
           </div>
+        </div>
 
-          <div className="auth-buttons">
+        <div className="auth-buttons">
             <button className="auth-btn theme-toggle" onClick={() => setDarkMode(!darkMode)} title={darkMode ? 'Chế độ sáng' : 'Chế độ tối'}>
               {darkMode ? <Sun size={16} /> : <Moon size={16} />}
             </button>
@@ -1076,25 +1118,34 @@ function App() {
               Vui lòng thử lại sau ít phút.
             </div>
 
-            {fallback.suggestions && fallback.suggestions.length > 0 && (
-              <div className="fallback-suggestions">
-                <div className="fallback-suggestions-title">💡 Sản phẩm gợi ý</div>
+            {ragLoading && (
+              <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+                <div className="loading-spinner" style={{ margin: '0 auto 0.5rem' }}></div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  Đang tìm sản phẩm tương tự...
+                </div>
+              </div>
+            )}
+
+            {!ragLoading && ragSuggestions.length > 0 && (
+              <div style={{ marginTop: '1.5rem' }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: 800, color: 'var(--text-secondary)', marginBottom: '1rem', textAlign: 'center' }}>
+                  💡 Sản phẩm tương tự bạn có thể quan tâm
+                </div>
                 <div className="suggestions-grid">
-                  {fallback.suggestions.map((s, i) => (
-                    <div key={i} className="suggestion-card">
+                  {ragSuggestions.map((s, i) => (
+                    <div key={i} className="suggestion-card" onClick={() => handleRagSuggestionClick(s.name)}>
                       <div className="suggestion-platform">{s.platform}</div>
                       <div className="suggestion-name" title={s.name}>{s.name}</div>
                       <div className="suggestion-price">{s.current_price ? formatPrice(s.current_price) : 'Liên hệ'}</div>
-                      {s.link && s.link !== '#' && (
-                        <a
-                          href={s.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{ fontSize: '0.65rem', color: 'var(--primary)', fontWeight: 700, textDecoration: 'none' }}
-                        >
-                          Xem chi tiết →
-                        </a>
-                      )}
+                      <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', background: 'var(--chip-bg)', padding: '0.15rem 0.5rem', borderRadius: 999 }}>
+                          {s.platform_count || 3}+ sàn
+                        </span>
+                        <span style={{ fontSize: '0.6rem', color: 'var(--text-muted)', background: 'var(--chip-bg)', padding: '0.15rem 0.5rem', borderRadius: 999 }}>
+                          {Math.round(s.similarity * 100)}% khớp
+                        </span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -1106,7 +1157,7 @@ function App() {
         {!loading && !error && !fallback && searched && results.length === 0 && (
           <div className="empty-state">
             <div className="empty-state-icon">🔍</div>
-            <div className="empty-state-title">Không tìm thấy sản phẩm "{lastQuery}"</div>
+            <div className="empty-state-title">Hệ thống không có sản phẩm này</div>
             <div className="empty-state-sub">
               Thử tìm kiếm với tên sản phẩm khác
             </div>
@@ -1115,32 +1166,13 @@ function App() {
 
         {!loading && !error && results.length > 0 && (
           <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
-              <div>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                  Kết quả tìm kiếm: <span style={{ color: 'var(--primary)' }}>"{lastQuery}"</span>
-                </h2>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                  Tìm thấy {results.length} sản phẩm trên {platforms.length} sàn thương mại điện tử
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                {platforms.map(p => (
-                  <span
-                    key={p}
-                    style={{
-                      padding: '0.4rem 0.9rem',
-                      borderRadius: 999,
-                      fontSize: '0.7rem',
-                      fontWeight: 800,
-                      background: foundPlatforms.includes(p) ? 'var(--success-bg)' : 'var(--chip-bg)',
-                      color: foundPlatforms.includes(p) ? 'var(--success-text)' : 'var(--text-muted)'
-                    }}
-                  >
-                    {p} {foundPlatforms.includes(p) ? '✓' : '✗'}
-                  </span>
-                ))}
-              </div>
+            <div style={{ marginBottom: '1.5rem' }}>
+              <h2 style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-primary)' }}>
+                Kết quả tìm kiếm: <span style={{ color: 'var(--primary)' }}>"{lastQuery}"</span>
+              </h2>
+              <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                Tìm thấy {results.length} sản phẩm trên {platforms.length} sàn thương mại điện tử
+              </p>
             </div>
 
             <div className="results-grid">

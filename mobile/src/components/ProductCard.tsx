@@ -233,7 +233,7 @@ const ProductCard: React.FC<Props> = ({
       {chartData.labels.length > 0 && (
         <View style={styles.chartSection}>
           <View style={styles.chartHeader}>
-            <Text style={styles.chartTitle}>🔮 Dự báo giá LSTM</Text>
+            <Text style={styles.chartTitle}>🔮 Dự báo giá</Text>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <LineChart
@@ -262,24 +262,21 @@ const ProductCard: React.FC<Props> = ({
       {/* LSTM Metrics */}
       {lstmMetrics && (
         <View style={styles.lstmSection}>
-          <Text style={styles.lstmTitle}>📈 Đánh giá độ chính xác LSTM</Text>
+          <Text style={styles.lstmTitle}>📈 Độ chính xác dự báo (Kiểm thử lịch sử)</Text>
           <View style={styles.lstmGrid}>
             <View style={styles.lstmItem}>
               <Text style={styles.lstmLabel}>MAE</Text>
-              <Text style={styles.lstmValue}>{((lstmMetrics.mae / (product.current_price || 1)) * 100).toFixed(2)}%</Text>
+              <Text style={styles.lstmValue}>{formatPrice(lstmMetrics.mae)}</Text>
             </View>
             <View style={styles.lstmItem}>
               <Text style={styles.lstmLabel}>RMSE</Text>
-              <Text style={styles.lstmValue}>{((lstmMetrics.rmse / (product.current_price || 1)) * 100).toFixed(2)}%</Text>
+              <Text style={styles.lstmValue}>{formatPrice(lstmMetrics.rmse)}</Text>
             </View>
             <View style={styles.lstmItem}>
               <Text style={styles.lstmLabel}>MAPE</Text>
               <Text style={styles.lstmValue}>{lstmMetrics.mape}%</Text>
             </View>
-            <View style={styles.lstmItem}>
-              <Text style={styles.lstmLabel}>Đúng hướng</Text>
-              <Text style={styles.lstmValue}>{lstmMetrics.direction_accuracy}%</Text>
-            </View>
+          </View>
           </View>
         </View>
       )}

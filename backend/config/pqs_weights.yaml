@@ -8,9 +8,9 @@ pqs_weights:
   shop_reputation:
     value: 0.15
     rationale: "Trọng số 15% cho uy tín cửa hàng/sàn. Cửa hàng lớn có chính sách đổi trả tốt, giảm rủi ro cho người mua."
-  positive_rate:
+  neg_penalty:
     value: 0.15
-    rationale: "Trọng số 15% cho tỷ lệ bình luận tích cực. Bổ sung cho sentiment score, phản ánh mức độ hài lòng tổng thể."
+    rationale: "Trọng số 15% cho phạt tiêu cực. Thay thế S_PosRate để tránh trùng lặp với S_Sentiment. Công thức: max(0, 100 - neg_ratio * 150)."
   sold_volume:
     value: 0.15
     rationale: "Trọng số 15% cho số lượng đã bán. Sản phẩm bán chạy thường có độ tin cậy cao hơn."
@@ -31,15 +31,15 @@ rqs_weights:
 
 recommendation_thresholds:
   buy_now:
-    pqs_min: 85
+    pqs_min: 75
     trend_required: "increasing"
-    note: "PQS >= 85 và xu hướng giá tăng -> Nên mua ngay kẻo lỡ"
+    note: "PQS >= 75 và xu hướng giá tăng -> Nên mua ngay kẻo lỡ"
   buy:
-    pqs_min: 70
-    note: "PQS >= 70 -> Nên mua"
+    pqs_min: 60
+    note: "PQS >= 60 -> Nên mua"
   wait:
-    pqs_max: 70
-    note: "PQS < 70 -> Chờ đợi"
+    pqs_max: 60
+    note: "PQS < 60 -> Chờ đợi"
 
 note: >
   Các trọng số trên là heuristic của prototype, được xây dựng dựa trên

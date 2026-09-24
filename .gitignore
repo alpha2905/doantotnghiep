@@ -10,11 +10,8 @@ env/
 ENV/
 
 # Model files (large, not for git)
-model/phobert_models/
-backend/phobert_models/
 backend/model/
-backend_new/model/
-backend_new/models/
+backend/phobert_models/
 backend/models/*.keras
 backend/models/*.pkl
 backend/models/*.h5
@@ -23,7 +20,7 @@ backend/models/*.pth
 
 # MongoDB local data
 mongo_data/
-mongorestore.exe
+tools/mongorestore.exe
 
 # Node
 node_modules/

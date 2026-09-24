@@ -21,7 +21,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.normpath(os.path.join(SCRIPT_DIR, os.pardir))
-RESULTS_DIR = os.path.join(SCRIPT_DIR, "results")
+RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 # Cấu hình API

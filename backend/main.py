@@ -28,6 +28,11 @@ import auth
 import firebase_helper
 import price_updater
 
+# --- Hybrid Forecast + Comment Analyzer (module tách riêng, xem docs/REWRITE_PLAN.md) ---
+import forecaster
+import comment_analyzer
+import json
+
 # --- CẤU HÌNH (ưu tiên biến môi trường khi deploy) ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 BRANDS = ["iphone", "samsung", "oppo", "xiaomi"]
@@ -170,6 +175,15 @@ async def lifespan(app: FastAPI):
         print(f"❌ AI Error: {e}")
         import traceback
         traceback.print_exc()
+    # Nạp ánh xạ nhãn của PhoBERT từ label_mapping.json (tránh bug đảo nhãn POSITIVE/NEGATIVE)
+    global SENTIMENT_LABEL_MAP, ASPECT_LABEL_MAP, LABEL_MAP_SOURCES
+    SENTIMENT_LABEL_MAP, ASPECT_LABEL_MAP, LABEL_MAP_SOURCES = comment_analyzer.load_label_maps(
+        os.path.join(BASE_DIR, "model", "phobert_models", "sentiment_classification", "final_model"),
+        os.path.join(BASE_DIR, "model", "phobert_models", "aspect_classification", "final_model"),
+    )
+    print(f"🏷️ Label mapping sentiment: {SENTIMENT_LABEL_MAP}")
+    print(f"🏷️ Label mapping aspect: {len(ASPECT_LABEL_MAP)} nhãn | nguồn: {LABEL_MAP_SOURCES}")
+
     # Khởi tạo Firebase Admin (nếu có credentials)
     firebase_helper.init_firebase()
 
@@ -209,6 +223,10 @@ app.add_middleware(
 # Cache kết quả so sánh để trả về nhanh (TTL 10 phút)
 compare_cache = {}
 COMPARE_CACHE_TTL = 600  # giây
+
+# Cache AI computations để tránh chạy lại model không cần thiết
+ai_cache = {}
+AI_CACHE_TTL = 3600  # 1 giờ
 import time as _time
 
 # Kết nối MongoDB
@@ -236,185 +254,43 @@ STORE_COLLECTIONS = {
     "MobileCity": "mobilecity",
 }
 
-def analyze_comments_ai(comments):
-    if not comments: 
-        return {"pos": 0, "neu": 100, "neg": 0, "list": []}
-    
-    # Xử lý tất cả bình luận một cách nhất quán (deterministic), không dùng random.sample
-    # Giới hạn 50 câu bình luận sạch đầu tiên để bảo đảm nhất quán PQS/Sentiment và tốc độ API
-    comments_clean = [str(c).strip() for c in comments if isinstance(c, (str, dict)) and str(c).strip()]
-    if not comments_clean:
-        return {"pos": 0, "neu": 100, "neg": 0, "list": []}
+# --- Ánh xạ nhãn PhoBERT: ĐỌC TỪ label_mapping.json của model (được set trong lifespan).
+# Lý do: model fine-tune lưu thứ tự nhãn 0=negative, 1=neutral, 2=positive (xem train_phobert_from_labeled.py),
+# trong khi code cũ hardcode 0=POSITIVE/2=NEGATIVE => nhãn bị ĐẢO NGƯỢC (đã sửa).
+SENTIMENT_LABEL_MAP = None
+ASPECT_LABEL_MAP = None
+LABEL_MAP_SOURCES = {}
 
-    sample = comments_clean[:50]
-    results = []
-    stats = {"POSITIVE": 0, "NEUTRAL": 0, "NEGATIVE": 0}
-    
-    # Từ điển từ khóa đã SẮP XẾP THEO ĐỘ DÀI (dài nhất trước) để ưu tiên cụm từ cụ thể
-    aspect_keywords = [
-        # CAMERA (ưu tiên cao nhất vì hay bị nhầm)
-        ("camera chụp", "camera"), ("camera sau", "camera"), ("camera trước", "camera"),
-        ("chụp đêm", "camera"), ("chụp ảnh", "camera"), ("chụp xóa phông", "camera"),
-        ("góc siêu rộng", "camera"), ("góc rộng", "camera"), 
-        ("chống rung", "camera"), ("vỡ ảnh", "camera"), ("quay phim", "camera"),
-        ("quay video", "camera"), ("ống kính", "camera"), ("selfie", "camera"),
-        ("xóa phông", "camera"), ("hình ảnh", "camera"), ("ảnh", "camera"),
-        ("video", "camera"), ("camera", "camera"), ("chụp", "camera"),
-        ("quay", "camera"), ("nét", "camera"), ("mờ", "camera"),
-        ("zoom", "camera"), 
-        
-        # PIN
-        ("dung lượng pin", "pin"), ("thời lượng pin", "pin"), ("thời gian sử dụng pin", "pin"),
-        ("tụt pin nhanh", "pin"), ("tụt pin", "pin"), ("chai pin", "pin"),
-        ("sạc không dây", "pin"), ("sạc nhanh", "pin"), ("sạc pin", "pin"),
-        ("pin yếu", "pin"), ("pin trâu", "pin"), ("hết pin", "pin"), ("cắm sạc", "pin"),
-        ("dung lượng", "pin"), ("mah", "pin"), ("pin", "pin"),
-        
-        # MÀN HÌNH
-        ("tần số quét", "màn_hình"), ("độ phân giải màn", "màn_hình"),
-        ("màn hình", "màn_hình"), ("màn cong", "màn_hình"), 
-        ("tai thỏ", "màn_hình"), ("đục lỗ", "màn_hình"),
-        ("hiển thị", "màn_hình"), ("oled", "màn_hình"), ("amoled", "màn_hình"),
-        ("độ sáng", "màn_hình"), ("màu sắc", "màn_hình"), ("sắc nét", "màn_hình"),
-        ("độ phân giải", "màn_hình"), ("cảm ứng", "màn_hình"), ("màn", "màn_hình"),
-        
-        # GIÁ
-        ("giảm giá", "giá"), ("trả góp", "giá"), ("khuyến mãi", "giá"),
-        ("giá cả", "giá"), ("đáng tiền", "giá"), ("giá", "giá"),
-        ("tiền", "giá"), ("rẻ", "giá"), ("đắt", "giá"), 
-        ("hợp lý", "giá"), ("sale", "giá"), ("bù", "giá"),
-        ("trả trước", "giá"),
-        
-        # THIẾT KẾ
-        ("thiết kế", "thiết_kế"), ("ngoại hình", "thiết_kế"), 
-        ("chất liệu", "thiết_kế"), ("hoàn thiện", "thiết_kế"),
-        ("vỏ", "thiết_kế"), ("tróc", "thiết_kế"), ("cầm", "thiết_kế"),
-        ("mỏng", "thiết_kế"), ("nhẹ", "thiết_kế"), ("sang trọng", "thiết_kế"),
-        ("sang", "thiết_kế"), ("đẹp", "thiết_kế"), 
-        ("màu sắc", "thiết_kế"), ("màu", "thiết_kế"),
-        
-        # HIỆU NĂNG
-        ("hiệu năng", "hiệu_năng"), ("đa nhiệm", "hiệu_năng"),
-        ("nóng máy", "hiệu_năng"), ("chơi game nặng", "hiệu_năng"),
-        ("chơi game", "hiệu_năng"), ("chiến game", "hiệu_năng"),
-        ("mượt", "hiệu_năng"), ("lag", "hiệu_năng"), ("giật", "hiệu_năng"),
-        ("fps", "hiệu_năng"), ("chip", "hiệu_năng"), ("ram", "hiệu_năng"),
-        ("tốc độ", "hiệu_năng"), ("nhanh", "hiệu_năng"), ("chậm", "hiệu_năng"),
-        ("đơ", "hiệu_năng"), ("xử lý", "hiệu_năng"), ("app", "hiệu_năng"),
-        ("phần mềm", "hiệu_năng"), ("nóng", "hiệu_năng"),
-        
-        # LOA ÂM THANH - để sau cùng vì "loa" dễ match nhầm
-        ("âm bass", "loa_âm_thanh"), ("âm thanh", "loa_âm_thanh"),
-        ("loa ngoài", "loa_âm_thanh"), ("loa trong", "loa_âm_thanh"),
-        ("nghe gọi", "loa_âm_thanh"), ("gọi điện", "loa_âm_thanh"),
-        ("nghe nhạc", "loa_âm_thanh"), ("micro", "loa_âm_thanh"),
-        ("mic", "loa_âm_thanh"), ("rè", "loa_âm_thanh"), ("loa", "loa_âm_thanh"),
-        ("volume", "loa_âm_thanh"), ("nghe", "loa_âm_thanh"),
-        
-        # BẢO MẬT
-        ("nhận diện khuôn mặt", "bảo_mật"), ("mở khóa khuôn mặt", "bảo_mật"),
-        ("face id", "bảo_mật"), ("faceid", "bảo_mật"),
-        ("vân tay", "bảo_mật"), ("mật khẩu", "bảo_mật"),
-        ("khóa máy", "bảo_mật"), ("bảo mật", "bảo_mật"), ("mở khóa", "bảo_mật"),
-        
-        # HỆ ĐIỀU HÀNH
-        ("hệ điều hành", "hệ_điều_hành"), ("bản cập nhật", "hệ_điều_hành"),
-        ("cập nhật phần mềm", "hệ_điều_hành"), ("giao diện người dùng", "hệ_điều_hành"),
-        ("ios", "hệ_điều_hành"), ("android", "hệ_điều_hành"), ("update", "hệ_điều_hành"),
-        ("giao diện", "hệ_điều_hành")
-    ]
 
-    for text in sample:
-        try:
-            text_str = str(text).strip()
-            text_low = text_str.lower()
-            
-            # 1. Dự đoán bằng Model PhoBERT (backup)
-            inputs = tokenizer(text_str, return_tensors="pt", truncation=True, max_length=128, padding='max_length')
-            with torch.no_grad():
-                s_idx = torch.argmax(model_sent(**inputs).logits).item()
-                a_idx = torch.argmax(model_aspect(**inputs).logits).item()
+def analyze_comments_ai(comments, sample_limit=50):
+    """Wrapper tương thích ngược: phân tích bình luận bằng hybrid PhoBERT + rule-based.
 
-            # 2. Xử lý SENTIMENT
-            # PhoBERT: 0: Positive, 1: Neutral, 2: Negative (từ train_phobert.py)
-            label = "NEUTRAL"
-            if s_idx == 0: label = "POSITIVE"
-            elif s_idx == 2: label = "NEGATIVE"
+    Logic thật nằm ở comment_analyzer.analyze_comments (dùng chung với background worker).
+    """
+    return comment_analyzer.analyze_comments(
+        comments,
+        tokenizer,
+        model_sent,
+        model_aspect,
+        sample_limit=sample_limit,
+        sentiment_map=SENTIMENT_LABEL_MAP,
+        aspect_map=ASPECT_LABEL_MAP,
+        label_sources=LABEL_MAP_SOURCES,
+    )
 
-            # Rule-based SENTIMENT (ưu tiên cao)
-            question_words = ["không ạ", "không nhỉ", "có không", "bao nhiêu", "thế nào", 
-                              "khi nào", "tư vấn", "hỏi", "còn không", "còn hàng không", 
-                              "còn k ạ", "shop còn", "có hàng không"]
-            
-            # Negative cực kỳ mạnh - phát hiện context tiêu cực
-            strong_negative = ["hỏng", "lỗi", "tệ", "kém", "thất vọng", "lừa đảo", 
-                              "hư", "trả hàng", "vỡ ảnh", "treo máy", "tắt nguồn",
-                              "crash", "bug", "mờ", "nóng quá", "chậm", "đơ", "lag"]
-            
-            negative_words = ["đắt quá", "kém chất lượng", "tụt pin nhanh", "chai pin",
-                            "giật lag", "rè", "hết pin nhanh"]
-            
-            positive_words = ["rất tốt", "cực tốt", "quá tốt", "đáng mua", "hài lòng", 
-                            "ưng ý", "chất lượng", "mượt", "ổn định",
-                            "pin trâu", "sắc nét", "sang trọng", "rõ nét", "ngon"]
-            
-            # Kiểm tra negative trước (ưu tiên cao nhất)
-            has_negative = any(n in text_low for n in strong_negative + negative_words)
-            # Kiểm tra positive
-            has_positive = any(p in text_low for p in positive_words)
-            # Kiểm tra hỏi
-            is_question = any(q in text_low for q in question_words)
-            
-            if is_question:
-                label = "NEUTRAL"
-            elif has_negative:
-                label = "NEGATIVE"
-            elif has_positive:
-                label = "POSITIVE"
-            # Nếu không khớp rule nào thì giữ lại kết quả PhoBERT
-
-            # 3. Xử lý ASPECT - RULE-BASED ƯU TIÊN TUYỆT ĐỐI
-            final_aspect = "khác"
-            
-            # Tìm từ khóa dài nhất match trước (đã sắp xếp theo độ dài)
-            for keyword, aspect in aspect_keywords:
-                if keyword in text_low:
-                    final_aspect = aspect
-                    break  # Chỉ lấy keyword đầu tiên match (đã sắp xếp theo độ dài)
-            
-            # Nếu không tìm thấy thì fallback sang PhoBERT
-            if final_aspect == "khác" and a_idx < len(ASPECT_LABELS):
-                final_aspect = ASPECT_LABELS[a_idx]
-
-            stats[label] += 1
-            results.append({"text": text_str, "label": label, "aspect": final_aspect})
-        except:
-            continue
-        
-    total = len(results)
-    pos_count = stats["POSITIVE"]
-    neg_count = stats["NEGATIVE"]
-    neu_count = stats["NEUTRAL"]
-    if total == 0:
-        return {"pos": 0, "neu": 100, "neg": 0, "pos_count": 0, "total": 0, "list": []}
-    return {
-        "pos": round((pos_count / total) * 100),
-        "neu": round((neu_count / total) * 100),
-        "neg": round((neg_count / total) * 100),
-        "pos_count": pos_count,
-        "total": total,
-        "list": results
-    }
 
 # ============================================================
 # CÁC HÀM TÍNH TOÁN NÂNG CAO (THEO GÓP Ý GIẢNG VIÊN)
 # ============================================================
 
-def calculate_pqs(product, sentiment_stats, current_price=None, forecast_price=None, min_market_price=None, max_market_price=None):
+def calculate_pqs(product, sentiment_stats, current_price=None, forecast_price=None, min_market_price=None, max_market_price=None, return_breakdown=False):
     """
     PQS = Product Quality Score (Thang điểm 100)
     Công thức theo đề tài:
-    PQS = (S_Rating × 0.25) + (S_Sentiment × 0.30) + (S_ShopRep × 0.15) + (S_PosRate × 0.15) + (S_Sold × 0.15)
+    PQS = (S_Rating × 0.25) + (S_Sentiment × 0.30) + (S_ShopRep × 0.15) + (S_NegPenalty × 0.15) + (S_Sold × 0.15)
+    
+    Thay đổi: S_PosRate bị loại bỏ vì trùng lặp với S_Sentiment.
+    Thay vào đó dùng S_NegPenalty để tránh điểm thấp bất thường khi thiếu dữ liệu positive.
     
     Trọng số được heuristic từ prototype, chưa được tối ưu hóa bằng khảo sát.
     Chi tiết xem backend/config/pqs_weights.yaml
@@ -438,10 +314,12 @@ def calculate_pqs(product, sentiment_stats, current_price=None, forecast_price=N
     }
     s_shop_rep = shop_reputation_map.get(platform, 70)
     
-    # 4. S_PosRate: Tỷ lệ bình luận tích cực (0-100)
+    # 4. S_NegPenalty: Phần thưởng/trừ dựa trên tỷ lệ bình luận tiêu cực (0-100)
+    # Thay thế S_PosRate để tránh trùng lặp với S_Sentiment.
+    # Công thức: 100% negative -> 0 điểm, 0% negative -> 100 điểm
     total_comments = sentiment_stats.get('total', 0) or 0
-    pos_count = sentiment_stats.get('pos_count', 0) or 0
-    s_pos_rate = (pos_count / total_comments * 100) if total_comments > 0 else s_sentiment
+    neg_ratio = (sentiment_stats.get('neg', 0) or 0) / 100 if total_comments > 0 else 0
+    s_neg_penalty = max(0, 100 - neg_ratio * 150)  # 0% neg -> 100, 33% neg -> 50, 67%+ neg -> 0
     
     # 5. S_Sold: Số lượng đã bán (0-100) - normalize log scale
     sold_volume = product.get('sold_volume', 0) or 0
@@ -455,21 +333,90 @@ def calculate_pqs(product, sentiment_stats, current_price=None, forecast_price=N
     W_RATING = 0.25
     W_SENTIMENT = 0.30
     W_SHOP_REP = 0.15
-    W_POS_RATE = 0.15
+    W_NEG_PENALTY = 0.15
     W_SOLD = 0.15
     
     pqs = (s_rating * W_RATING) + (s_sentiment * W_SENTIMENT) + \
-          (s_shop_rep * W_SHOP_REP) + (s_pos_rate * W_POS_RATE) + (s_sold * W_SOLD)
-    return round(min(100, max(0, pqs)))
+          (s_shop_rep * W_SHOP_REP) + (s_neg_penalty * W_NEG_PENALTY) + \
+          (s_sold * W_SOLD)
+    total = round(min(100, max(0, pqs)))
+
+    if not return_breakdown:
+        return total
+
+    return {
+        "total": total,
+        "components": {
+            "rating": round(s_rating, 1),
+            "sentiment": round(s_sentiment, 1),
+            "shop_reputation": round(s_shop_rep, 1),
+            "neg_penalty": round(s_neg_penalty, 1),
+            "sold_volume": round(s_sold, 1),
+        },
+        "weights": {
+            "rating": W_RATING,
+            "sentiment": W_SENTIMENT,
+            "shop_reputation": W_SHOP_REP,
+            "neg_penalty": W_NEG_PENALTY,
+            "sold_volume": W_SOLD,
+        },
+        "inputs": {
+            "rating": rating,
+            "sentiment_pos_percent": sentiment_stats.get('pos', 0),
+            "sentiment_neg_percent": sentiment_stats.get('neg', 0),
+            "analyzed_comments": total_comments,
+            "sold_volume": sold_volume,
+            "platform": platform,
+        },
+        "formula": "PQS = 0.25*S_Rating + 0.30*S_Sentiment + 0.15*S_ShopRep + 0.15*S_NegPenalty + 0.15*S_Sold",
+        "note": "Trọng số heuristic của prototype, chi tiết rationale xem backend/config/pqs_weights.yaml",
+    }
+
+
+def build_lstm_metrics_payload(forecast_info):
+    """Chuyển payload của Hybrid Forecast Engine -> lstm_metrics (giữ tương thích giao diện cũ).
+
+    LƯU Ý MINH BẠCH: các chỉ số dưới đây là của PHƯƠNG PHÁP ĐƯỢC CHỌN (có thể là baseline
+    Naive/Moving-Average nếu baseline tốt hơn LSTM trên chính chuỗi giá của sản phẩm).
+    Giao diện hiển thị kèm tên phương pháp để tránh hiểu nhầm là "độ chính xác LSTM".
+    """
+    models = forecast_info.get("models_compared") or []
+    selected = next((m for m in models if m.get("selected")), None)
+
+    base = {
+        "eval_method": forecast_info.get("method"),
+        "eval_protocol": forecast_info.get("eval_protocol"),
+        "selected_method": forecast_info.get("method"),
+        "selected_method_name": forecast_info.get("method_name"),
+        "sample_size": forecast_info.get("sample_size", 0),
+        "models": models,
+        "note": forecast_info.get("eval_note"),
+    }
+    if not selected:
+        return base
+
+    mape = float(selected.get("mape") or 0)
+    base.update({
+        "mae": selected.get("mae"),
+        "rmse": selected.get("rmse"),
+        "mape": selected.get("mape"),
+        "smape": selected.get("smape"),
+        "direction_accuracy": selected.get("direction_accuracy"),
+        "accuracy": round(max(0.0, 100 - mape), 1),
+        "sample_size": selected.get("samples"),
+        "selected_method": selected.get("key"),
+        "selected_method_name": selected.get("name"),
+    })
+    return base
 
 
 def get_pqs_label(pqs):
     """Đánh giá chất lượng dựa trên PQS"""
-    if pqs >= 85:
+    if pqs >= 75:
         return {"label": "🟢 Chất lượng rất tốt", "color": "green"}
-    elif pqs >= 70:
+    elif pqs >= 60:
         return {"label": "🟡 Chất lượng tốt", "color": "yellow"}
-    elif pqs >= 50:
+    elif pqs >= 45:
         return {"label": "🟠 Chất lượng trung bình", "color": "orange"}
     else:
         return {"label": "🔴 Chất lượng kém", "color": "red"}
@@ -526,10 +473,10 @@ def get_buy_recommendation(pqs, price_stats, current_price, forecast_price):
     - Nên chờ: Giá cao + Dự báo giảm
     - Không khuyến nghị: PQS thấp + Bình luận tiêu cực nhiều
     """
-    if pqs < 50:
+    if pqs < 45:
         return {
             "action": "Không khuyến nghị",
-            "reason": "Chất lượng sản phẩm thấp (PQS < 50)",
+            "reason": "Chất lượng sản phẩm thấp (PQS < 45)",
             "color": "red",
             "icon": "⛔"
         }
@@ -569,6 +516,8 @@ def get_buy_recommendation(pqs, price_stats, current_price, forecast_price):
     }
 
 
+# (LEGACY) Giữ lại để tham chiếu/so sánh: runtime đã chuyển sang forecaster.forecast_next()
+# (rolling-origin backtest cho TẤT CẢ phương pháp, không chỉ LSTM).
 def calculate_lstm_metrics(price_history, forecast_price, lstm_model=None, scaler=None, look_back=LOOK_BACK):
     """
     Đánh giá độ chính xác của LSTM bằng backtest trên dữ liệu lịch sử thực tế:
@@ -578,8 +527,38 @@ def calculate_lstm_metrics(price_history, forecast_price, lstm_model=None, scale
     - Direction Accuracy (Tỷ lệ dự báo đúng hướng)
     - accuracy: Phần trăm dự đoán giá tương lai so với giá thực tế (100 - MAPE)
     """
-    prices = [parse_price(h.get('price', '')) for h in price_history if h.get('price')]
-    prices = [p for p in prices if p > 0]
+    history_dict = {}
+    for h in price_history:
+        if not h:
+            continue
+        price_val = parse_price(h.get('price', ''))
+        if price_val <= 0:
+            continue
+        scraped_at = h.get('scraped_at')
+        if hasattr(scraped_at, 'strftime'):
+            date_str = scraped_at.strftime("%Y-%m-%d")
+        else:
+            date_str = str(scraped_at)[:10]
+        history_dict[date_str] = price_val
+
+    if len(history_dict) < 3:
+        return None
+
+    sorted_dates = sorted(history_dict.keys())
+    start_date = datetime.strptime(sorted_dates[0], "%Y-%m-%d")
+    end_date = datetime.strptime(sorted_dates[-1], "%Y-%m-%d")
+
+    prices = []
+    last_price = None
+    current = start_date
+    while current <= end_date:
+        date_str = current.strftime("%Y-%m-%d")
+        if date_str in history_dict:
+            last_price = history_dict[date_str]
+        prices.append(last_price)
+        current = current + timedelta(days=1)
+
+    prices = [p for p in prices if p is not None and p > 0]
     if len(prices) < 3:
         return None
 
@@ -700,7 +679,7 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
     """
     Search Fallback Engine:
     Bước 1: Tìm kiếm sản phẩm theo TÊN trên 8 sàn trong MongoDB
-    Bước 2: Nếu không tồn tại -> Trả về thông báo + gợi ý sản phẩm tương tự
+    Bước 2: Nếu không tồn tại hoặc không đủ >=3 sàn -> Trả về thông báo + gợi ý sản phẩm tương tự
     """
     search_name = clean_product_name(name)
     
@@ -710,11 +689,12 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
         return await cursor.to_list(length=20)
     
     raw_data = await asyncio.gather(*(get_candidates(c) for c in STORE_COLLECTIONS.values()))
-    all_candidates = [p for sublist in raw_data for p in sublist]
     
-    if not all_candidates:
-        # ===== SEARCH FALLBACK ENGINE =====
-        # Không có dữ liệu -> Tìm sản phẩm gợi ý cùng brand
+    # Đếm số sàn có kết quả
+    platforms_with_results = sum(1 for items in raw_data if items)
+    
+    # Nếu không có dữ liệu HOẶC không đủ >=1 sàn -> kích hoạt fallback
+    if not any(raw_data) or platforms_with_results < 1:
         suggestions = []
         for source, collection_name in STORE_COLLECTIONS.items():
             col = db[collection_name]
@@ -726,7 +706,7 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
                         "platform": source,
                         "name": item.get('name'),
                         "current_price": parse_price(item.get('price')),
-                        "image": item.get('image_url', ''),
+                        "image": item.get('image', '') or item.get('image_url', ''),
                         "link": item.get('product_url', '#')
                     })
             except Exception:
@@ -734,7 +714,7 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
         
         return {
             "found": False,
-            "message": f"Không tìm thấy sản phẩm '{name}' trong hệ thống.",
+            "message": f"Không tìm thấy sản phẩm '{name}' trong hệ thống hoặc không đủ dữ liệu từ các sàn.",
             "search_term": name,
             "suggestions": suggestions[:10]
         }
@@ -742,9 +722,112 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
     return {
         "found": True,
         "search_term": name,
-        "result_count": len(all_candidates),
-        "message": f"Tìm thấy {len(all_candidates)} sản phẩm cho '{name}' trên 8 sàn"
+        "result_count": len([p for sublist in raw_data for p in sublist]),
+        "message": f"Tìm thấy {platforms_with_results}/8 sàn có sản phẩm cho '{name}'"
     }
+
+
+@app.get("/api/search/fallback")
+async def search_fallback(name: str = Query(...), limit: int = Query(10)):
+    """
+    RAG-style fallback search:
+    - Tìm kiếm fuzzy/partial matching trên tên sản phẩm
+    - Chỉ gợi ý sản phẩm có ở >=3 sàn
+    - Sắp xếp theo độ tương đồng với query
+    - Trả về gợi ý sản phẩm tương tự nhất
+    """
+    if not name or len(name.strip()) < 2:
+        return {"suggestions": []}
+
+    search_name = clean_product_name(name)
+    search_tokens = set(search_name.lower().split())
+
+    async def get_similar_products(collection_name, platform_name):
+        col = db[collection_name]
+        try:
+            cursor = col.find({}).limit(100)
+            items = await cursor.to_list(length=100)
+            for item in items:
+                item['_platform_source'] = platform_name
+            return items
+        except Exception:
+            return []
+
+    # Lấy sản phẩm từ tất cả sàn, kèm tên sàn để đếm platform đúng
+    raw_data = await asyncio.gather(*(
+        get_similar_products(c, p) for p, c in STORE_COLLECTIONS.items()
+    ))
+    all_products = [p for sublist in raw_data for p in sublist]
+
+    # Nhóm sản phẩm theo tên đã chuẩn hóa và đếm số sàn
+    product_platforms = {}
+    for p in all_products:
+        p_name = p.get('name', '')
+        p_clean = clean_product_name(p_name)
+        if not p_clean:
+            continue
+        name_key = p_clean.lower().strip()
+        platform = p.get('_platform_source', '')
+        if not platform:
+            continue
+        if name_key not in product_platforms:
+            product_platforms[name_key] = {
+                'name': p_name,
+                'platforms': set(),
+                'products': []
+            }
+        product_platforms[name_key]['platforms'].add(platform)
+        product_platforms[name_key]['products'].append(p)
+
+    # Tính điểm similarity cho từng sản phẩm, chỉ lấy sản phẩm có >=3 sàn
+    scored_products = []
+    for name_key, data in product_platforms.items():
+        if len(data['platforms']) < 3:
+            continue
+
+        p_name = data['name']
+        p_clean = name_key
+        p_tokens = set(p_clean.split())
+
+        intersection = len(search_tokens & p_tokens)
+        union = len(search_tokens | p_tokens) if (search_tokens | p_tokens) else 1
+        jaccard_score = intersection / union
+
+        brand_bonus = 0
+        if any(token in p_clean for token in search_tokens if len(token) > 3):
+            brand_bonus = 0.3
+
+        platform_count_bonus = min(0.2, len(data['platforms']) * 0.05)
+
+        total_score = jaccard_score + brand_bonus + platform_count_bonus
+
+        if total_score > 0.1:
+            products = data['products']
+            products.sort(key=lambda x: parse_price(x.get('price', '')) or float('inf'))
+            best_product = products[0]
+
+            scored_products.append({
+                "platform": best_product.get('_platform_source', best_product.get('platform', '')),
+                "name": p_name,
+                "current_price": parse_price(best_product.get('price')),
+                "image": best_product.get('image', '') or best_product.get('image_url', ''),
+                "link": best_product.get('product_url', '#'),
+                "platform_count": len(data['platforms']),
+                "similarity": round(total_score, 3)
+            })
+
+    scored_products.sort(key=lambda x: x['similarity'], reverse=True)
+    seen_names = set()
+    unique_suggestions = []
+    for p in scored_products:
+        name_key = p['name'].lower().strip()
+        if name_key not in seen_names:
+            seen_names.add(name_key)
+            unique_suggestions.append(p)
+            if len(unique_suggestions) >= limit:
+                break
+
+    return {"suggestions": unique_suggestions}
 
 
 @app.get("/api/suggest")
@@ -793,10 +876,30 @@ async def suggest_products(name: str = Query(...), limit: int = Query(8)):
     return {"suggestions": unique}
 
 
+def _ai_cache_key(*parts):
+    return "|".join(str(p) for p in parts)
+
+def get_cached_ai(key):
+    entry = ai_cache.get(key)
+    if entry and (_time.time() - entry['ts']) < AI_CACHE_TTL:
+        return entry['data']
+    return None
+
+def set_cached_ai(key, data):
+    ai_cache[key] = {'ts': _time.time(), 'data': data}
+
+
 @app.get("/api/compare")
-async def get_comparison(brand: str = "iphone", name: str = Query(...)):
+async def get_comparison(brand: str = "iphone", name: str = Query(...), fast: bool = Query(False)):
+    """
+    So sánh giá sản phẩm trên 8 sàn.
+    
+    Query params:
+    - name: tên sản phẩm
+    - fast: nếu true, trả về kết quả cơ bản ngay (không chạy AI/LSTM), phù hợp khi cần tốc độ
+    """
     # Kiểm tra cache trước (trả về ngay lập tức nếu đã có)
-    cache_key = f"{brand}:{name.strip().lower()}"
+    cache_key = f"{brand}:{name.strip().lower()}:fast={fast}"
     now = _time.time()
     cached = compare_cache.get(cache_key)
     if cached and (now - cached['ts']) < COMPARE_CACHE_TTL:
@@ -808,18 +911,10 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
 
     async def get_candidates(collection_name):
         col = db[collection_name]
-        # Tìm kiếm mở rộng hơn một chút để lọc sau
         cursor = col.find({"name": {"$regex": search_name.replace(" ", ".*"), "$options": "i"}}).limit(20)
         return await cursor.to_list(length=20)
 
     raw_data = await asyncio.gather(*(get_candidates(c) for c in STORE_COLLECTIONS.values()))
-    for i, source in enumerate(STORE_COLLECTIONS.keys()):
-        print(f"DEBUG: Platform {source} found {len(raw_data[i])} items")
-
-    # Logic Matching:
-    # 1. Tìm sản phẩm có model base khớp chính xác nhất với model base của từ khóa tìm kiếm
-    # 2. Nếu nhiều sản phẩm khớp model base, chọn cái phổ biến nhất hoặc khớp search_name nhất
-    
     all_candidates = [p for sublist in raw_data for p in sublist]
     if not all_candidates:
         return {"results": []}
@@ -863,8 +958,8 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
 
     # Với mỗi sàn, chọn sản phẩm rẻ nhất khớp model base
     store_results = []
-    for i, (source, collection_name) in enumerate(STORE_COLLECTIONS.items()):
-        candidates = raw_data[i]
+    
+    async def process_platform(source, collection_name, candidates):
         platform_candidates = []
         for p in candidates:
             p_name_clean = clean_product_name(p.get('name', ''))
@@ -877,106 +972,152 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...)):
                 platform_candidates.append((sub_score, p))
         
         if not platform_candidates:
-            continue
+            return None
         
         platform_candidates.sort(key=lambda x: x[0], reverse=True)
-        # Chọn sản phẩm rẻ nhất trong các ứng viên khớp model
         best_candidates = [p for _, p in platform_candidates]
         best_candidates.sort(key=lambda p: parse_price(p.get('price', '')))
         target_product = best_candidates[0]
 
-        if target_product:
-            p = target_product
+        if not target_product:
+            return None
             
-            # --- BƯỚC 2: LỊCH SỬ GIÁ THỰC (KHÔNG PADDING) ---
-            # Chuyển lịch sử từ DB thành list giá thực tế, KHÔNG forward-fill
-            history_dict = {}
-            for h in p.get('price_history', []):
-                if h.get('scraped_at'):
-                    date_str = h['scraped_at'].strftime("%Y-%m-%d") if hasattr(h['scraped_at'], 'strftime') else str(h['scraped_at'])[:10]
-                    history_dict[date_str] = parse_price(h.get('price', ''))
-            
-            # Chỉ lấy giá thực tế, không padding
-            sorted_dates = sorted(history_dict.keys())
-            real_prices = [history_dict[d] for d in sorted_dates if history_dict[d] > 0]
-            current_price = parse_price(p.get('price', ''))
-            if not real_prices and current_price > 0:
-                real_prices = [current_price]
+        p = target_product
+        current_price = parse_price(p.get('price', ''))
 
-            # --- BƯỚC 3: DỮ LIỆU BIỂU ĐỒ THEO TRỤC 7 NGÀY CHUNG (không forward-fill) ---
-            # Bước 2 đã có: sorted_dates (ngày có giá thực), real_prices (giá thực),
-            # current_price. Dựng final_prices dài đúng 7 điểm theo master_date_list,
-            # điểm thiếu -> None (frontend vẽ đường đứt đoạn, không bịa giá).
-            final_prices = [history_dict.get(d_str) or None for d_str in master_date_list]
+        # --- BƯỚC 2: LỊCH SỬ GIÁ THỰC (không che giấu ngày thiếu dữ liệu) ---
+        fc_cfg = forecaster.load_config()
+        chart_days = int(fc_cfg.get("default_chart_days", 7))
+        series_all = forecaster.distinct_prices(p.get('price_history', []))
+        if not series_all and current_price > 0:
+            series_all = [current_price]
+        series_window = forecaster.build_daily_series(p.get('price_history', []), days=chart_days)
+        series_history = forecaster.build_daily_series(
+            p.get('price_history', []), days=int(fc_cfg.get("chart_max_days", 30))
+        )
+        last_crawl = series_window.get("last_observed_date") or "N/A"
 
-            # --- BƯỚC 4: DỰ BÁO GIÁ BẰNG LSTM (Model tổng quát) ---
-            forecast = 0
-            insufficient_history = False
-            if lstm_model is not None and scaler is not None and len(real_prices) >= LOOK_BACK:
-                try:
-                    X_input = np.array(real_prices[-LOOK_BACK:]).reshape(-1, 1)
-                    X_scaled = scaler.transform(X_input)
-                    pred = lstm_model.predict(X_scaled.reshape(1, LOOK_BACK, 1), verbose=0)
-                    forecast = int(scaler.inverse_transform(pred)[0][0])
-                except Exception as e:
-                    print(f"Lỗi dự báo {source}: {e}")
-            else:
-                insufficient_history = True
-                forecast = 0  # Báo không đủ lịch sử giá thực để dự báo
-            
-            # Giá hiển thị = giá cuối lịch sử giá thực (tối mới din lịch sử)
-            forecast_price = forecast if forecast > 0 else current_price
-            sentiment_data = analyze_comments_ai(p.get('comments', []))
-            
-            # Tính PQS (Product Quality Score) theo công thức đề tài
-            pqs = calculate_pqs(
-                p, sentiment_data,
-                current_price=current_price,
-                forecast_price=forecast_price,
-                min_market_price=min_market_price,
-                max_market_price=max_market_price
+        forecast_price = current_price
+        forecast_info = {
+            "forecast": current_price,
+            "method": "insufficient_history",
+            "method_name": "Bản ghi nhanh (fast=true) chưa chạy dự báo AI",
+            "reason": "Endpoint đang ở chế độ fast=true: chỉ trả dữ liệu giá cơ bản, không chạy LSTM/PhoBERT.",
+            "insufficient_history": True,
+            "is_lstm_used": False,
+            "hybrid_mode": None,
+            "hybrid_note": None,
+            "band": None,
+            "profile": forecaster.profile_series(series_all),
+            "models_compared": [],
+            "sample_size": 0,
+            "eval_protocol": "rolling_origin_backtest",
+        }
+        sentiment_data = comment_analyzer.empty_sentiment()
+        pqs = 50
+        pqs_label = {"label": "🟠 Chất lượng trung bình", "color": "orange"}
+        pqs_breakdown = {}
+        price_stats = calculate_price_stats(p.get('price_history', []))
+        price_trend = get_price_trend(current_price, forecast_price)
+        buy_recommendation = get_buy_recommendation(pqs, price_stats, current_price, forecast_price)
+        lstm_metrics = {}
+
+        if not fast:
+            # --- BƯỚC 4: DỰ BÁO GIÁ — Hybrid Forecast Engine (LSTM + baseline, chọn theo backtest) ---
+            ai_key = _ai_cache_key(
+                "forecast_v2", p.get('_id'), len(series_all),
+                tuple(series_all[-LOOK_BACK:]) if len(series_all) >= LOOK_BACK else ()
             )
+            cached_ai = get_cached_ai(ai_key)
+            if cached_ai:
+                forecast_info = cached_ai['forecast_info']
+            else:
+                forecast_info = forecaster.forecast_next(series_all, lstm_model, scaler, fc_cfg)
+                set_cached_ai(ai_key, {'forecast_info': forecast_info})
+
+            forecast_price = forecast_info.get("forecast") or current_price
+            lstm_metrics = build_lstm_metrics_payload(forecast_info)
+
+            # --- BƯỚC 5: PHÂN TÍCH CẢM XÚC — hybrid PhoBERT + rule-based ---
+            sentiment_key = _ai_cache_key("sentiment_v2", p.get('_id'), len(p.get('comments', [])))
+            cached_sentiment = get_cached_ai(sentiment_key)
+            if cached_sentiment:
+                sentiment_data = cached_sentiment
+            else:
+                sentiment_data = analyze_comments_ai(p.get('comments', []))
+                set_cached_ai(sentiment_key, sentiment_data)
+
+            pqs_breakdown = calculate_pqs(
+                p, sentiment_data, current_price=current_price, forecast_price=forecast_price,
+                min_market_price=min_market_price, max_market_price=max_market_price,
+                return_breakdown=True
+            )
+            pqs = pqs_breakdown["total"]
             pqs_label = get_pqs_label(pqs)
-            
-            # Tính thống kê giá (Min, Avg, Max, Current)
-            price_stats = calculate_price_stats(p.get('price_history', []))
-            
-            # Xác định xu hướng giá
             price_trend = get_price_trend(current_price, forecast_price)
-            
-            # Buy Recommendation Engine
             buy_recommendation = get_buy_recommendation(pqs, price_stats, current_price, forecast_price)
-            
-            # LSTM Metrics (MAE, RMSE, MAPE, Direction Accuracy, Accuracy %)
-            lstm_metrics = calculate_lstm_metrics(p.get('price_history', []), forecast_price, lstm_model, scaler)
-            
-            # Thêm RQS cho từng comment
-            sentiment_list = sentiment_data.get('list', [])
-            for cmt in sentiment_list:
-                cmt['rqs'] = calculate_rqs(cmt.get('text', ''), cmt.get('label', 'NEUTRAL'))
-            
-            store_results.append({
-                "platform": source,
-                "name": p.get('name'),
-                "current_price": current_price,
-                "forecast": forecast_price,
-                "insufficient_history": insufficient_history,
-                "last_crawl_date": sorted_dates[-1] if sorted_dates else "N/A",
-                "image": p.get('image_url', ''),
-                "sentiment": sentiment_data,
-                "chart": {
-                    "labels": display_labels, # Luôn dùng chung 1 trục ngày
-                    "data": final_prices      # Luôn trả về đủ 7 điểm dữ liệu
-                },
-                "link": p.get('product_url', '#'),
-                # === CÁC CHỈ SỐ NÂNG CAO (THEO GÓP Ý GIẢNG VIÊN) ===
-                "pqs": pqs,
-                "pqs_label": pqs_label,
-                "price_stats": price_stats,
-                "price_trend": price_trend,
-                "buy_recommendation": buy_recommendation,
-                "lstm_metrics": lstm_metrics
-            })
+
+        # --- BƯỚC 6: BIỂU ĐỒ (7 ngày gần nhất + điểm dự báo, kèm cờ ngày thiếu dữ liệu) ---
+        chart_labels = list(series_window.get("labels") or []) + ["Dự báo"]
+        chart_data = list(series_window.get("prices") or []) + [
+            forecast_price if forecast_price and forecast_price > 0 else None
+        ]
+        chart_observed = list(series_window.get("observed") or []) + [True]
+        chart_filled = list(series_window.get("filled") or []) + [False]
+
+        return {
+            "platform": source,
+            "name": p.get('name'),
+            "current_price": current_price,
+            "forecast": forecast_price,
+            "insufficient_history": bool(forecast_info.get("insufficient_history")),
+            "forecast_method": forecast_info.get("method"),
+            "forecast_method_name": forecast_info.get("method_name"),
+            "forecast_method_reason": forecast_info.get("reason"),
+            "forecast_band": forecast_info.get("band"),
+            "hybrid_mode": forecast_info.get("hybrid_mode"),
+            "hybrid_note": forecast_info.get("hybrid_note"),
+            "is_lstm_used": forecast_info.get("is_lstm_used"),
+            "models_compared": forecast_info.get("models_compared", []),
+            "forecast_profile": forecast_info.get("profile"),
+            "forecast_sample_size": forecast_info.get("sample_size"),
+            "last_crawl_date": last_crawl,
+            "image": p.get('image', '') or p.get('image_url', ''),
+            "sentiment": sentiment_data,
+            "chart": {
+                "labels": chart_labels,
+                "data": chart_data,
+                "observed": chart_observed,
+                "filled": chart_filled,
+                "today_index": len(chart_labels) - 2,
+                "forecast_index": len(chart_labels) - 1
+            },
+            "chart_history": {
+                "labels": series_history.get("labels"),
+                "dates": series_history.get("dates"),
+                "prices": series_history.get("prices"),
+                "observed": series_history.get("observed"),
+                "filled": series_history.get("filled")
+            },
+            "chart_days_default": chart_days,
+            "link": p.get('product_url', '#'),
+            "pqs": pqs,
+            "pqs_label": pqs_label,
+            "pqs_breakdown": pqs_breakdown,
+            "price_stats": price_stats,
+            "price_trend": price_trend,
+            "buy_recommendation": buy_recommendation,
+            "lstm_metrics": lstm_metrics
+        }
+
+    # Parallelize platform processing
+    platform_tasks = []
+    for i, (source, collection_name) in enumerate(STORE_COLLECTIONS.items()):
+        candidates = raw_data[i]
+        platform_tasks.append(process_platform(source, collection_name, candidates))
+    
+    platform_results = await asyncio.gather(*platform_tasks, return_exceptions=True)
+    store_results = [r for r in platform_results if r is not None and not isinstance(r, Exception)]
 
     # Sắp xếp theo giá tăng dần và trả về 3 sàn rẻ nhất
     store_results.sort(key=lambda r: r["current_price"] or 0)
@@ -998,11 +1139,6 @@ async def register(
     full_name: str = Body(""),
 ):
     """Đăng ký tài khoản mới bằng email."""
-    if not email or "@" not in email or "." not in email:
-        raise HTTPException(status_code=400, detail="Email không hợp lệ")
-    if not password or len(password) < 6:
-        raise HTTPException(status_code=400, detail="Mật khẩu phải có ít nhất 6 ký tự")
-
     existing = await auth.get_user_by_email(db, email)
     if existing:
         raise HTTPException(status_code=400, detail="Email đã được đăng ký")
@@ -1021,16 +1157,33 @@ async def login(
     email: str = Body(...),
     password: str = Body(...),
 ):
-    """Đăng nhập bằng email + mật khẩu."""
+    """Đăng nhập bằng email + mật khẩu. Nếu tài khoản chưa có, tự động đăng ký mới."""
+    if not auth.is_valid_email(email):
+        raise HTTPException(status_code=400, detail="Email không hợp lệ")
+    
+    if not password or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Mật khẩu phải có ít nhất 6 ký tự")
+    
     user = await auth.get_user_by_email(db, email)
-    if not user or not auth.verify_password(password, user.get("password_hash", "")):
+    if not user:
+        user = await auth.create_user(db, email, password, full_name="")
+        token = auth.create_access_token({"sub": str(user["_id"])})
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": auth.user_to_public(user),
+            "new_user": True
+        }
+    
+    if not auth.verify_password(password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Email hoặc mật khẩu không đúng")
 
     token = auth.create_access_token({"sub": str(user["_id"])})
     return {
         "access_token": token,
         "token_type": "bearer",
-        "user": auth.user_to_public(user)
+        "user": auth.user_to_public(user),
+        "new_user": False
     }
 
 
@@ -1447,3 +1600,119 @@ if __name__ == "__main__":
     uvicorn.run(app, host="127.0.0.1", port=8000)
 # uvicorn main:app --reload
 # python -m uvicorn main:app --reload
+
+# ============================================================
+# AI INSIGHTS — số liệu thực nghiệm (Chương 4) + cấu hình model
+# ============================================================
+RESULTS_DIR = os.path.join(BASE_DIR, "results")
+
+
+def _load_result_json(filename):
+    """Đọc 1 file kết quả thực nghiệm trong backend/results (None nếu chưa có)."""
+    path = os.path.join(RESULTS_DIR, filename)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _load_yaml_config(filename):
+    """Đọc file cấu hình trong backend/config (None nếu thiếu PyYAML hoặc lỗi)."""
+    path = os.path.join(BASE_DIR, "config", filename)
+    try:
+        import yaml
+        with open(path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except Exception:
+        return None
+
+
+def _load_pqs_rqs_summary():
+    """Chỉ lấy phần tổng hợp của báo cáo PQS/RQS (file gốc ~1.1MB)."""
+    data = _load_result_json("evaluation_report_pqs_rqs_real_db.json")
+    if not isinstance(data, dict):
+        return None
+    return {
+        "pqs_stats": data.get("pqs_stats"),
+        "rqs_stats": data.get("rqs_stats"),
+        "recommendation_distribution": data.get("recommendation_distribution"),
+        "brand_distribution": data.get("brand_distribution"),
+        "top10_pqs_high": data.get("top10_pqs_high"),
+    }
+
+
+@app.get("/api/ai/insights")
+async def ai_insights():
+    """Số liệu thực nghiệm + cấu hình model cho dashboard "AI Model Insights".
+
+    Nguồn dữ liệu: backend/results/*.json (sinh bởi backend/scripts/experiment_runner.py
+    và các script evaluate_*.py). Không đọc file PQS/RQS 1.1MB để giữ response nhẹ.
+    """
+    cache_key = "ai_insights_v1"
+    cached = get_cached_ai(cache_key)
+    if cached:
+        return cached
+
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "models": {
+            "lstm_loaded": lstm_model is not None,
+            "lstm_scaler_loaded": scaler is not None,
+            "phobert_loaded": model_sent is not None,
+            "phobert": comment_analyzer.get_analyzer_meta(model_sent),
+            "label_map_sources": LABEL_MAP_SOURCES,
+            "sentiment_label_map": {str(k): v for k, v in (SENTIMENT_LABEL_MAP or {}).items()},
+        },
+        "forecast_config": forecaster.get_config_rationale(),
+        "pqs_weights": _load_yaml_config("pqs_weights.yaml"),
+        "experiments": {
+            "lstm_temporal": _load_result_json("lstm_temporal_results.json"),
+            "forecast_selection": _load_result_json("forecast_selection_results.json"),
+            "phobert_hybrid": _load_result_json("phobert_hybrid_results.json"),
+            "aspect_model": _load_result_json("aspect_model_results.json"),
+            "entity_resolution": _load_result_json("entity_resolution_results.json"),
+            "api_benchmark": _load_result_json("api_benchmark_results.json"),
+            "api_load_test": _load_result_json("api_load_test_results.json"),
+            "pqs_rqs": _load_pqs_rqs_summary(),
+        },
+        "notes": [
+            "lstm_metrics trên từng sản phẩm được tính bằng rolling-origin backtest (chỉ dùng dữ liệu quá khứ).",
+            "forecast_method/reason cho biết Hybrid Engine đã chọn phương pháp nào và vì sao.",
+            "Số liệu ở mục experiments lấy từ backend/results/*.json — chạy backend/scripts/experiment_runner.py để làm mới.",
+        ],
+    }
+    set_cached_ai(cache_key, payload)
+    return payload
+
+
+@app.post("/api/collect-request")
+async def create_collect_request(payload: dict = Body(default={})):
+    """Ghi nhận yêu cầu thu thập dữ liệu cho sản phẩm chưa có trong hệ thống.
+
+    KHÔNG crawl trực tiếp trong request (tránh treo server lúc demo); scraper sẽ xử lý
+    danh sách pending trong lần chạy kế tiếp.
+    """
+    name = str((payload or {}).get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Thiếu tên sản phẩm")
+
+    doc = {
+        "name": name,
+        "platforms": (payload or {}).get("platforms", []),
+        "source": (payload or {}).get("source", "web"),
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc),
+    }
+    try:
+        col = db.collect_requests
+        await col.update_one({"name": name, "status": "pending"}, {"$set": doc}, upsert=True)
+        pending = await col.count_documents({"status": "pending"})
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Không ghi được yêu cầu: {e}")
+
+    return {
+        "ok": True,
+        "message": f"Đã ghi nhận yêu cầu thu thập '{name}'. Hệ thống sẽ crawl trong lần chạy scraper kế tiếp.",
+        "pending_requests": pending,
+    }
