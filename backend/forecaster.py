@@ -126,10 +126,10 @@ def daily_price_map(price_history):
     for h in price_history or []:
         if not isinstance(h, dict):
             continue
-        value = parse_price(h.get("price", ""))
+        value = parse_price(h.get("price") or h.get("price_number") or h.get("price_value") or "")
         if value <= 0:
             continue
-        date_str = to_date_str(h.get("scraped_at"))
+        date_str = to_date_str(h.get("scraped_at") or h.get("date"))
         if not date_str:
             continue
         prices[date_str] = value
@@ -165,7 +165,21 @@ def build_daily_series(price_history, days=None, end_date=None, cfg=None):
     date_list = [(end_dt - timedelta(days=d)).strftime("%Y-%m-%d") for d in range(days - 1, -1, -1)]
 
     dates, values, observed, filled = [], [], [], []
+    # Khởi tạo last_valid bằng giá mới nhất trước cửa sổ (nếu có)
     last_valid = None
+    sorted_dates = sorted(prices.keys())
+    if sorted_dates:
+        # Tìm giá gần nhất trước hoặc bằng ngày bắt đầu cửa sổ
+        window_start = date_list[-1]  # ngày cũ nhất trong cửa sổ
+        for d in sorted_dates:
+            if d <= window_start:
+                last_valid = prices[d]
+            else:
+                break
+    # Fallback: nếu vẫn null, dùng giá mới nhất toàn bộ
+    if last_valid is None and sorted_dates:
+        last_valid = prices[sorted_dates[-1]]
+
     for d in date_list:
         value = prices.get(d)
         if value and value > 0:

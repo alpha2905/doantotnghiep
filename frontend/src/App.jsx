@@ -61,18 +61,21 @@ function ProductCard({ product, index, user, token, onToggleFavorite, onRequireL
   const lstmMetrics = product.lstm_metrics
   const pqsLabel = product.pqs_label || { label: '', color: 'green' }
 
-  const chartData = chart.labels.map((label, i) => ({
+  const historicalLabels = chart.labels.slice(0, -1)
+  const historicalPrices = chart.data.slice(0, -1)
+  const forecastPrice = product.forecast ?? chart.data[chart.data.length - 1] ?? null
+  const lastHistoricalPrice = historicalPrices[historicalPrices.length - 1]
+
+  const chartData = historicalLabels.map((label, i) => ({
     name: label,
-    price: chart.data[i],
-    forecast: i === chart.labels.length - 1 ? chart.data[i] : null
+    price: historicalPrices[i],
+    forecast: i === historicalLabels.length - 1 ? lastHistoricalPrice : null
   }))
-  if (chart.labels && chart.labels.length > 0 && product.forecast != null) {
-    chartData.push({
-      name: 'Dự báo',
-      price: null,
-      forecast: product.forecast
-    })
-  }
+  chartData.push({
+    name: 'Dự báo',
+    price: null,
+    forecast: forecastPrice
+  })
 
   const comments = getRandomComments(sentiment.list, showAllComments ? 20 : 10)
   const totalComments = sentiment.list.length
@@ -1111,7 +1114,9 @@ function App() {
             <div className="fallback-icon">🔍</div>
             <div className="fallback-title">Không tìm thấy "{lastQuery}" trong hệ thống</div>
             <div className="fallback-message">
-              {fallback.message}
+              {fallback.found
+                ? `Hệ thống tìm thấy dữ liệu trên các sàn nhưng chưa có kết quả so sánh chính xác cho "${lastQuery}".`
+                : fallback.message}
             </div>
             <div className="fallback-note">
               ⚡ Hệ thống sẽ tự động thu thập dữ liệu từ 8 sàn và lưu vào MongoDB.

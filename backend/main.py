@@ -83,13 +83,33 @@ def clean_product_name(name):
 
 def extract_model_base(name):
     name = clean_product_name(name)
-    # Loại bỏ dung lượng (gb, tb)
-    name = re.sub(r'\d+\s*(gb|tb)', '', name)
+    # Loại bỏ dung lượng (gb, tb) - case insensitive
+    name = re.sub(r'\d+\s*(gb|tb)', '', name, flags=re.IGNORECASE)
+    # Loại bỏ cụm khuyến mãi/giảm giá/bảo hành kèm số
+    name = re.sub(r'giảm\s*giá\s*\d+%?', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'giảm\s*\d+%?', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'bảo\s*hành\s*\d+', '', name, flags=re.IGNORECASE)
+    name = re.sub(r'\b\d+\s*năm\b', '', name, flags=re.IGNORECASE)
     # Loại bỏ các từ bổ trợ không phải là model chính
-    junk_words = ["chính hãng", "vn/a", "5g", "4g", "lte", "lắp sim", "hàng nhập khẩu"]
+    junk_words = [
+        "chính hãng", "vn/a", "vna", "5g", "4g", "lte",
+        "lắp sim", "hàng nhập khẩu", "cũ", "mới",
+        "giảm giá", "bảo hành", "sealed", "fulbox", "box",
+        "like new", "nhập khẩu", "chính", "hàng",
+        "giảm", "discount", "khuyến mãi", "ưu đãi"
+    ]
     for word in junk_words:
         name = name.replace(word, "")
-    return " ".join(name.split())
+    # Loại bỏ ký tự đơn lẻ còn sót lại (vd: chữ "i" trong "I Chính hãng")
+    name = re.sub(r'\b[a-zA-Z]\b', ' ', name)
+    # Loại bỏ ký tự đặc biệt, chuẩn hóa khoảng trắng
+    name = re.sub(r'[^\w\s]', ' ', name)
+    # Chuẩn hóa khoảng trắng
+    result = " ".join(name.split())
+    # Nếu chuỗi còn số ở đầu (vd: "12 pro max"), thêm "iphone" để tăng khả năng match
+    if result and result[0].isdigit():
+        result = "iphone " + result
+    return result
 
 def parse_price(price):
     """Chuyển chuỗi giá VN ('29.990.000₫') thành số nguyên."""
@@ -102,6 +122,27 @@ def parse_price(price):
         return int(digits)
     except ValueError:
         return 0
+
+
+def get_latest_price_from_history(p: dict) -> int:
+    """
+    Lấy giá hiển thị của sản phẩm từ giá mới nhất (cuối cùng) trong lịch sử giá (price_history).
+    Nếu price_history rỗng hoặc không có giá hợp lệ, fallback về price_number hoặc price.
+    """
+    if not isinstance(p, dict):
+        return 0
+
+    price_history = p.get("price_history")
+    if isinstance(price_history, list) and price_history:
+        for h in reversed(price_history):
+            if isinstance(h, dict):
+                val = parse_price(h.get("price") or h.get("price_number") or h.get("price_value"))
+            else:
+                val = parse_price(h)
+            if val > 0:
+                return val
+
+    return parse_price(p.get("price_number") or p.get("price") or 0)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -428,10 +469,18 @@ def calculate_price_stats(price_history):
     - Min Price (giá thấp nhất)
     - Average Price (giá trung bình)
     - Max Price (giá cao nhất)
-    - Current Price (giá hiện tại)
+    - Current Price (giá hiện tại - giá mới nhất trong lịch sử giá)
     """
-    prices = [parse_price(h.get('price', '')) for h in price_history if h.get('price')]
-    prices = [p for p in prices if p > 0]
+    if not isinstance(price_history, list) or not price_history:
+        return None
+    prices = []
+    for h in price_history:
+        if isinstance(h, dict):
+            val = parse_price(h.get('price') or h.get('price_number') or h.get('price_value'))
+        else:
+            val = parse_price(h)
+        if val > 0:
+            prices.append(val)
     if not prices:
         return None
     return {
@@ -705,7 +754,7 @@ async def search_products(brand: str = "iphone", name: str = Query(...)):
                     suggestions.append({
                         "platform": source,
                         "name": item.get('name'),
-                        "current_price": parse_price(item.get('price')),
+                        "current_price": get_latest_price_from_history(item),
                         "image": item.get('image', '') or item.get('image_url', ''),
                         "link": item.get('product_url', '#')
                     })
@@ -732,7 +781,7 @@ async def search_fallback(name: str = Query(...), limit: int = Query(10)):
     """
     RAG-style fallback search:
     - Tìm kiếm fuzzy/partial matching trên tên sản phẩm
-    - Chỉ gợi ý sản phẩm có ở >=3 sàn
+    - Chỉ gợi ý sản phẩm có ở 2-3 sàn
     - Sắp xếp theo độ tương đồng với query
     - Trả về gợi ý sản phẩm tương tự nhất
     """
@@ -759,14 +808,17 @@ async def search_fallback(name: str = Query(...), limit: int = Query(10)):
     ))
     all_products = [p for sublist in raw_data for p in sublist]
 
-    # Nhóm sản phẩm theo tên đã chuẩn hóa và đếm số sàn
+    # Nhóm sản phẩm theo model base (không phân biệt dung lượng/phụ kiện) và đếm số sàn
     product_platforms = {}
     for p in all_products:
         p_name = p.get('name', '')
         p_clean = clean_product_name(p_name)
         if not p_clean:
             continue
-        name_key = p_clean.lower().strip()
+        p_base = extract_model_base(p_name)
+        if not p_base:
+            continue
+        name_key = p_base.lower().strip()
         platform = p.get('_platform_source', '')
         if not platform:
             continue
@@ -779,10 +831,11 @@ async def search_fallback(name: str = Query(...), limit: int = Query(10)):
         product_platforms[name_key]['platforms'].add(platform)
         product_platforms[name_key]['products'].append(p)
 
-    # Tính điểm similarity cho từng sản phẩm, chỉ lấy sản phẩm có >=3 sàn
+    # Tính điểm similarity cho từng sản phẩm, chỉ lấy sản phẩm có 2-3 sàn
     scored_products = []
     for name_key, data in product_platforms.items():
-        if len(data['platforms']) < 3:
+        platform_count = len(data['platforms'])
+        if platform_count < 2 or platform_count > 3:
             continue
 
         p_name = data['name']
@@ -803,13 +856,13 @@ async def search_fallback(name: str = Query(...), limit: int = Query(10)):
 
         if total_score > 0.1:
             products = data['products']
-            products.sort(key=lambda x: parse_price(x.get('price', '')) or float('inf'))
+            products.sort(key=lambda x: get_latest_price_from_history(x) or float('inf'))
             best_product = products[0]
 
             scored_products.append({
                 "platform": best_product.get('_platform_source', best_product.get('platform', '')),
                 "name": p_name,
-                "current_price": parse_price(best_product.get('price')),
+                "current_price": get_latest_price_from_history(best_product),
                 "image": best_product.get('image', '') or best_product.get('image_url', ''),
                 "link": best_product.get('product_url', '#'),
                 "platform_count": len(data['platforms']),
@@ -850,7 +903,7 @@ async def suggest_products(name: str = Query(...), limit: int = Query(8)):
             return [{
                 "name": item.get('name', ''),
                 "platform": platform,
-                "price": parse_price(item.get('price_number') or item.get('price', '')),
+                "price": get_latest_price_from_history(item),
                 "image": item.get('image_url', '') or item.get('image', ''),
                 "link": item.get('product_url', '#') or item.get('url', '#')
             } for item in items]
@@ -939,12 +992,13 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...), fast: bo
             
         scored_candidates.append((score, p_base, p))
 
-    # Sắp xếp theo điểm và lấy model base tốt nhất
+    # Sắp xếp: ưu tiên điểm cao, nếu bằng nhau ưu tiên model base ngắn/generic hơn
+    scored_candidates.sort(key=lambda x: len(x[1]))
     scored_candidates.sort(key=lambda x: x[0], reverse=True)
     best_model_base = scored_candidates[0][1] if scored_candidates else base_search_name
 
     # Tính giá thị trường min/max từ tất cả sản phẩm khớp (cho S_Price)
-    market_prices = [parse_price(p.get('price', '')) for p in all_candidates]
+    market_prices = [get_latest_price_from_history(p) for p in all_candidates]
     market_prices = [p for p in market_prices if p > 0]
     min_market_price = min(market_prices) if market_prices else None
     max_market_price = max(market_prices) if market_prices else None
@@ -961,43 +1015,77 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...), fast: bo
     
     async def process_platform(source, collection_name, candidates):
         platform_candidates = []
+        best_tokens = set(best_model_base.split())
+        search_tokens = set(search_name.split())
+        
         for p in candidates:
             p_name_clean = clean_product_name(p.get('name', ''))
-            p_base = extract_model_base(p_name_clean)
+            p_base = extract_model_base(p.get('name', ''))
+            p_tokens = set(p_base.split())
             
+            # Token overlap: ít nhất 1 token model base khớp và không khớp nhầm model khác
+            overlap = best_tokens & p_tokens
+            if not overlap:
+                continue
+            
+            # Tránh khớp nhầm: vd search "iphone 12" không được nhận "iphone 13" hay "iphone 16e"
+            search_digits = {t for t in search_tokens if any(c.isdigit() for c in t)}
+            candidate_digits = {t for t in p_tokens if any(c.isdigit() for c in t)}
+            if search_digits and candidate_digits:
+                if not search_digits & candidate_digits:
+                    continue
+            
+            sub_score = 0
+            if p_base == best_model_base:
+                sub_score += 10
             if best_model_base in p_base or p_base in best_model_base:
-                sub_score = 0
-                if p_base == best_model_base: sub_score += 10
-                if search_name in p_name_clean: sub_score += 5
-                platform_candidates.append((sub_score, p))
+                sub_score += 5
+            platform_candidates.append((sub_score, p))
         
         if not platform_candidates:
             return None
         
         platform_candidates.sort(key=lambda x: x[0], reverse=True)
         best_candidates = [p for _, p in platform_candidates]
-        best_candidates.sort(key=lambda p: parse_price(p.get('price', '')))
+        best_candidates.sort(key=lambda p: get_latest_price_from_history(p))
         target_product = best_candidates[0]
 
         if not target_product:
             return None
             
         p = target_product
-        current_price = parse_price(p.get('price', ''))
+        current_price = get_latest_price_from_history(p)
+        forecast_price = current_price  # khởi tạo trước; sẽ cập nhật nếu fast=False
 
-        # --- BƯỚC 2: LỊCH SỬ GIÁ THỰC (không che giấu ngày thiếu dữ liệu) ---
+        # --- BƯỚC 2: LỊCH SỬ GIÁ THỰC (lấy 7 mốc giá thực tế gần nhất từ DB) ---
         fc_cfg = forecaster.load_config()
         chart_days = int(fc_cfg.get("default_chart_days", 7))
         series_all = forecaster.distinct_prices(p.get('price_history', []))
         if not series_all and current_price > 0:
             series_all = [current_price]
-        series_window = forecaster.build_daily_series(p.get('price_history', []), days=chart_days)
+        
+        # Lấy 7 mốc giá thực tế gần nhất từ DB (không phải cửa sổ lịch)
+        chart_prices = series_all[-7:] if len(series_all) > 7 else series_all
+        chart_dates = []
+        ph = p.get('price_history', [])
+        if ph:
+            price_map = forecaster.daily_price_map(ph)
+            sorted_dates = sorted(price_map.keys())
+            chart_dates = sorted_dates[-7:] if len(sorted_dates) > 7 else sorted_dates
+        
+        chart_labels = [f"{d[8:10]}/{d[5:7]}" for d in chart_dates] + ["Dự báo"]
+        chart_data = list(chart_prices) + [
+            forecast_price if forecast_price and forecast_price > 0 else None
+        ]
+        chart_observed = [True] * len(chart_prices) + [True]
+        chart_filled = [False] * len(chart_prices) + [False]
+        
+        # Fallback for series_history (giữ calendar window cho lịch sử dài)
         series_history = forecaster.build_daily_series(
-            p.get('price_history', []), days=int(fc_cfg.get("chart_max_days", 30))
+            p.get('price_history', []), days=int(fc_cfg.get("chart_max_days", 30)), cfg=fc_cfg
         )
-        last_crawl = series_window.get("last_observed_date") or "N/A"
+        last_crawl = chart_dates[-1] if chart_dates else "N/A"
 
-        forecast_price = current_price
         forecast_info = {
             "forecast": current_price,
             "method": "insufficient_history",
@@ -1024,15 +1112,16 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...), fast: bo
 
         if not fast:
             # --- BƯỚC 4: DỰ BÁO GIÁ — Hybrid Forecast Engine (LSTM + baseline, chọn theo backtest) ---
+            forecast_series = series_all[-7:] if len(series_all) > 7 else series_all
             ai_key = _ai_cache_key(
-                "forecast_v2", p.get('_id'), len(series_all),
-                tuple(series_all[-LOOK_BACK:]) if len(series_all) >= LOOK_BACK else ()
+                "forecast_v2", p.get('_id'), len(forecast_series),
+                tuple(forecast_series[-LOOK_BACK:]) if len(forecast_series) >= LOOK_BACK else ()
             )
             cached_ai = get_cached_ai(ai_key)
             if cached_ai:
                 forecast_info = cached_ai['forecast_info']
             else:
-                forecast_info = forecaster.forecast_next(series_all, lstm_model, scaler, fc_cfg)
+                forecast_info = forecaster.forecast_next(forecast_series, lstm_model, scaler, fc_cfg)
                 set_cached_ai(ai_key, {'forecast_info': forecast_info})
 
             forecast_price = forecast_info.get("forecast") or current_price
@@ -1057,13 +1146,9 @@ async def get_comparison(brand: str = "iphone", name: str = Query(...), fast: bo
             price_trend = get_price_trend(current_price, forecast_price)
             buy_recommendation = get_buy_recommendation(pqs, price_stats, current_price, forecast_price)
 
-        # --- BƯỚC 6: BIỂU ĐỒ (7 ngày gần nhất + điểm dự báo, kèm cờ ngày thiếu dữ liệu) ---
-        chart_labels = list(series_window.get("labels") or []) + ["Dự báo"]
-        chart_data = list(series_window.get("prices") or []) + [
-            forecast_price if forecast_price and forecast_price > 0 else None
-        ]
-        chart_observed = list(series_window.get("observed") or []) + [True]
-        chart_filled = list(series_window.get("filled") or []) + [False]
+        # --- BƯỚC 6: BIỂU ĐỒ ---
+        # chart_labels, chart_data, chart_observed, chart_filled đã được tính ở đầu hàm
+        # từ series_all[-7:] và chart_dates thực tế từ DB
 
         return {
             "platform": source,
@@ -1303,7 +1388,7 @@ async def get_notifications(user=Depends(auth.get_current_user)):
         if not product:
             continue
 
-        current_price = parse_price(product.get("price", "")) or added_price
+        current_price = get_latest_price_from_history(product) or added_price
 
         # Tính lại các chỉ số cho sản phẩm hiện tại
         sentiment_data = analyze_comments_ai(product.get("comments", []))
