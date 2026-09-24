@@ -9,14 +9,16 @@ venv/
 env/
 ENV/
 
-# Model files (large, not for git)
+# Model files (not for git - download via setup script)
 backend/model/
 backend/phobert_models/
-backend/models/*.keras
-backend/models/*.pkl
-backend/models/*.h5
-backend/models/*.pth
 *.safetensors
+
+# Small trained models (LSTM, scaler) - push lên git
+# backend/models/*.keras
+# backend/models/*.pkl
+# backend/models/*.h5
+# backend/models/*.pth
 
 # MongoDB local data
 mongo_data/
